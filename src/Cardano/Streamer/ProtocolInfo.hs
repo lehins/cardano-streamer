@@ -37,6 +37,7 @@ import Ouroboros.Consensus.Storage.Serialisation (
   HasBinaryBlockInfo,
   ReconstructNestedCtxt,
  )
+import qualified Ouroboros.Consensus.Storage.VolatileDB as VolatileDB
 import Ouroboros.Consensus.Util.CBOR (ReadIncrementalErr)
 import Ouroboros.Consensus.Util.ResourceRegistry (runWithTempRegistry)
 import Ouroboros.Network.Block (HeaderHash)
@@ -126,6 +127,8 @@ mkDbConfig dbDir protocolInfo@ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
       , dbConfChainDbArgs =
           chainDbArgs
             { ChainDB.cdbTracer = dbTracer
+            , ChainDB.cdbImmutableDbValidation = ImmutableDB.ValidateMostRecentChunk
+            , ChainDB.cdbVolatileDbValidation = VolatileDB.NoValidation
             }
       , dbConfProtocolInfo = protocolInfo
       }
