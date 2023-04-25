@@ -2,9 +2,10 @@
 
 module Cardano.Streamer.Producer where
 
+import Ouroboros.Consensus.Ledger.SupportsProtocol (LedgerSupportsProtocol)
 import Cardano.Streamer.Common
-
 import Conduit
+import Control.Monad.Trans.Except
 import Ouroboros.Consensus.Block
 import Ouroboros.Consensus.HeaderValidation (
   AnnTip,
@@ -12,7 +13,10 @@ import Ouroboros.Consensus.HeaderValidation (
   annTipPoint,
   headerStateTip,
  )
-import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState (headerState))
+import Ouroboros.Consensus.Ledger.Abstract (tickThenApplyLedgerResult)
+import Ouroboros.Consensus.Ledger.Basics (LedgerResult (lrResult))
+import Ouroboros.Consensus.Ledger.Extended (ExtLedgerCfg (..), ExtLedgerState (headerState))
+import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 
@@ -39,7 +43,7 @@ sourceBlocks iDb blockComponent withOriginAnnTip = do
       ImmutableDB.IteratorExhausted -> pure ()
       ImmutableDB.IteratorResult b -> yield b >> loop
 
-sourceBlocksWithState
+foldBlocksWithState
   :: ( MonadIO m
      , MonadReader env m
      , HasResourceRegistry env
@@ -53,6 +57,41 @@ sourceBlocksWithState
   -> (ExtLedgerState blk -> b -> m (ExtLedgerState blk))
   -- ^ Function to process each block with current ledger state
   -> ConduitT a c m (ExtLedgerState blk)
-sourceBlocksWithState iDb blockComponent initState action =
+foldBlocksWithState iDb blockComponent initState action =
   let withOriginAnnTip = headerStateTip (headerState initState)
    in sourceBlocks iDb blockComponent withOriginAnnTip .| foldMC action initState
+
+sourceBlocksWithState
+  :: ( MonadIO m
+     , MonadReader env m
+     , HasResourceRegistry env
+     , HasHeader blk
+     , HasAnnTip blk
+     )
+  => ImmutableDB.ImmutableDB IO blk
+  -> BlockComponent blk b
+  -> ExtLedgerState blk
+  -> (ExtLedgerState blk -> b -> m (ExtLedgerState blk, c))
+  -> ConduitT a c m (ExtLedgerState blk)
+sourceBlocksWithState iDb blockComponent initState action =
+  sourceBlocks iDb blockComponent withOriginAnnTip .| go initState
+  where
+    withOriginAnnTip = headerStateTip (headerState initState)
+    go ledgerState =
+      await >>= \case
+        Nothing -> pure ledgerState
+        Just b -> do
+          (ledgerState', c) <- lift $ action ledgerState b
+          yield c
+          go ledgerState'
+
+validateLedger
+  :: LedgerSupportsProtocol blk
+  => ExtLedgerState blk
+  -> blk
+  -> RIO (DbStreamerApp blk) (ExtLedgerState blk)
+validateLedger prevLedger block = do
+  ledgerCfg <- ExtLedgerCfg . pInfoConfig . dsAppProtocolInfo <$> ask
+  either (throwString . show) (pure . lrResult) $
+    runExcept $
+      tickThenApplyLedgerResult ledgerCfg block prevLedger

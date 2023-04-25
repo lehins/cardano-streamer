@@ -69,41 +69,35 @@ readInitLedgerState
      , DecodeDisk blk (AnnTip blk)
      , Serialise (HeaderHash blk)
      )
-  => DbConfig blk
-  -> DiskSnapshot
-  -> IO (ExtLedgerState blk)
-readInitLedgerState DbConfig{dbConfChainDbArgs, dbConfProtocolInfo} diskSnapshot = do
+  => DiskSnapshot
+  -> RIO (DbStreamerApp blk) (ExtLedgerState blk)
+readInitLedgerState diskSnapshot = do
+  ledgerDbFS <- ChainDB.cdbHasFSLgrDB . dsAppChainDbArgs <$> ask
+  ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
   let
-    ledgerDbFS = ChainDB.cdbHasFSLgrDB dbConfChainDbArgs
-    ccfg = configCodec (pInfoConfig dbConfProtocolInfo)
     extLedgerStateDecoder =
       decodeExtLedgerState (decodeDisk ccfg) (decodeDisk ccfg) (decodeDisk ccfg)
-  throwExceptT $
-    readSnapshot ledgerDbFS extLedgerStateDecoder decode diskSnapshot
+  liftIO $
+    throwExceptT $
+      readSnapshot ledgerDbFS extLedgerStateDecoder decode diskSnapshot
 
-mkIDbArgs
-  :: ( MonadIO m
-     , MonadReader env m
-     , HasResourceRegistry env
-     , HasLogFunc env
-     , Node.RunNode blk
-     , Show (Header blk)
-     )
-  => FilePath
-  -> ProtocolInfo IO blk
-  -> m (ImmutableDbArgs Identity IO blk)
-mkIDbArgs dbDir protocolInfo = do
-  (iDbArgs, _, _, _) <- fromChainDbArgs . dbConfChainDbArgs <$> mkDbConfig dbDir protocolInfo
-  pure iDbArgs
-
-data DbConfig blk = DbConfig
-  { dbConfDir :: !FilePath
-  , dbConfChainDbArgs :: !(ChainDB.ChainDbArgs Identity IO blk)
-  , dbConfProtocolInfo :: !(ProtocolInfo IO blk)
-  }
+-- mkIDbArgs
+--   :: ( MonadIO m
+--      , MonadReader env m
+--      , HasResourceRegistry env
+--      , HasLogFunc env
+--      , Node.RunNode blk
+--      , Show (Header blk)
+--      )
+--   => FilePath
+--   -> ProtocolInfo IO blk
+--   -> m (ImmutableDbArgs Identity IO blk)
+-- mkIDbArgs dbDir protocolInfo = do
+--   (iDbArgs, _, _, _) <- fromChainDbArgs . dbConfChainDbArgs <$> mkDbArgs dbDir protocolInfo
+--   pure iDbArgs
 
 -- | Prepare arguments for chain db.
-mkDbConfig
+mkDbArgs
   :: ( MonadIO m
      , MonadReader env m
      , HasResourceRegistry env
@@ -113,24 +107,19 @@ mkDbConfig
      )
   => FilePath
   -> ProtocolInfo IO blk
-  -> m (DbConfig blk)
-mkDbConfig dbDir protocolInfo@ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
+  -> m (ChainDB.ChainDbArgs Identity IO blk)
+mkDbArgs dbDir ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
   registry <- view registryL
   let
     chainDbArgs =
       Node.mkChainDbArgs registry InFuture.dontCheck pInfoConfig pInfoInitLedger chunkInfo defArgs
   dbTracer <- mkTracer LevelInfo
   logDebug $ "Preparing to open the database: " <> displayShow dbDir
-  pure
-    DbConfig
-      { dbConfDir = dbDir
-      , dbConfChainDbArgs =
-          chainDbArgs
-            { ChainDB.cdbTracer = dbTracer
-            , ChainDB.cdbImmutableDbValidation = ImmutableDB.ValidateMostRecentChunk
-            , ChainDB.cdbVolatileDbValidation = VolatileDB.NoValidation
-            }
-      , dbConfProtocolInfo = protocolInfo
+  pure $
+    chainDbArgs
+      { ChainDB.cdbTracer = dbTracer
+      , ChainDB.cdbImmutableDbValidation = ImmutableDB.ValidateMostRecentChunk
+      , ChainDB.cdbVolatileDbValidation = VolatileDB.NoValidation
       }
   where
     chunkInfo = Node.nodeImmutableDbChunkInfo (configStorage pInfoConfig)
@@ -162,3 +151,28 @@ withImmutableDb iDbArgs action = do
       action db
   logDebug "Closed an immutable database"
   pure res
+
+runDbStreamerApp
+  :: FilePath
+  -- ^ Config file path
+  -> FilePath
+  -- ^ Db directory
+  -> ProtocolInfo IO blk
+  -> RIO (DbStreamerApp blk) a
+  -> RIO env a
+runDbStreamerApp confFilePath dbDir action = do
+  logFunc <- view logFuncL
+  registry <- view registryL
+  protocolInfo <- readProtocolInfoCardano confFilePath
+  dbArgs <- mkDbArgs dbDir protocolInfo
+  let (iDbArgs, _, _, _) = fromChainDbArgs dbArgs
+  withImmutableDb iDbArgs $ \iDb ->
+    let app =
+          DbStreamerApp
+            { dsAppLogFunc = logFunc
+            , dsAppRegistry = registry
+            , dsAppProtocolInfo = protocolInfo
+            , dsAppChainDbArgs = dbArgs
+            , dsAppIDb = iDb
+            }
+     in runRIO app action

@@ -1,19 +1,29 @@
 {-# LANGUAGE LambdaCase #-}
 
 module Cardano.Streamer.Common (
+  DbStreamerApp (..),
   throwExceptT,
+  throwShowExceptT,
+  throwStringExceptT,
   mkTracer,
   HasResourceRegistry (..),
   RIO,
+  runRIO,
   module X,
 ) where
 
 import Control.Monad.Trans.Except
 import Control.Tracer (Tracer (..))
-import Ouroboros.Consensus.Util.ResourceRegistry
-import RIO as X hiding (RIO)
+import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
+import qualified Ouroboros.Consensus.Storage.ChainDB as ChainDB
+import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
+import Ouroboros.Consensus.Util.ResourceRegistry (ResourceRegistry)
+import RIO as X hiding (RIO, runRIO)
 
 type RIO env = ReaderT env IO
+
+runRIO :: MonadIO m => r -> RIO r a -> m a
+runRIO env = liftIO . flip runReaderT env
 
 class HasResourceRegistry env where
   registryL :: Lens' env (ResourceRegistry IO)
@@ -32,3 +42,26 @@ throwExceptT m =
   runExceptT m >>= \case
     Left exc -> throwIO exc
     Right res -> pure res
+
+throwStringExceptT :: MonadIO m => ExceptT String m a -> m a
+throwStringExceptT m =
+  runExceptT m >>= \case
+    Left exc -> throwString exc
+    Right res -> pure res
+
+throwShowExceptT :: (Show e, MonadIO m) => ExceptT e m a -> m a
+throwShowExceptT m = throwStringExceptT $ withExceptT show m
+
+data DbStreamerApp blk = DbStreamerApp
+  { dsAppLogFunc :: !LogFunc
+  , dsAppRegistry :: !(ResourceRegistry IO)
+  , dsAppProtocolInfo :: !(ProtocolInfo IO blk)
+  , dsAppChainDbArgs :: !(ChainDB.ChainDbArgs Identity IO blk)
+  , dsAppIDb :: !(ImmutableDB.ImmutableDB IO blk)
+  }
+
+instance HasLogFunc (DbStreamerApp blk) where
+  logFuncL = lens dsAppLogFunc $ \app logFunc -> app{dsAppLogFunc = logFunc}
+
+instance HasResourceRegistry (DbStreamerApp blk) where
+  registryL = lens dsAppRegistry $ \app registry -> app{dsAppRegistry = registry}
