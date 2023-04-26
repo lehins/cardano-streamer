@@ -1,11 +1,15 @@
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE LambdaCase #-}
 
 module Cardano.Streamer.Common (
   DbStreamerApp (..),
+  AppConfig (..),
   throwExceptT,
   throwShowExceptT,
   throwStringExceptT,
   mkTracer,
+  HasImmutableDb(..),
   HasResourceRegistry (..),
   RIO,
   runRIO,
@@ -17,6 +21,7 @@ import Control.Tracer (Tracer (..))
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import qualified Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
+import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
 import Ouroboros.Consensus.Util.ResourceRegistry (ResourceRegistry)
 import RIO as X hiding (RIO, runRIO)
 
@@ -60,8 +65,30 @@ data DbStreamerApp blk = DbStreamerApp
   , dsAppIDb :: !(ImmutableDB.ImmutableDB IO blk)
   }
 
+class HasImmutableDb env blk | env -> blk where
+  iDbL :: Lens' env (ImmutableDB.ImmutableDB IO blk)
+
+instance HasImmutableDb (DbStreamerApp blk) blk where
+  iDbL = lens dsAppIDb $ \app iDb -> app{dsAppIDb = iDb}
+
 instance HasLogFunc (DbStreamerApp blk) where
   logFuncL = lens dsAppLogFunc $ \app logFunc -> app{dsAppLogFunc = logFunc}
 
 instance HasResourceRegistry (DbStreamerApp blk) where
   registryL = lens dsAppRegistry $ \app registry -> app{dsAppRegistry = registry}
+
+data AppConfig = AppConfig
+  { appConfDbDir :: !FilePath
+  -- ^ Database directory
+  , appConfFilePath :: !FilePath
+  -- ^ Config file path
+  , appConfDiskSnapshot :: !(Maybe DiskSnapshot)
+  , appConfLogFunc :: !LogFunc
+  , appConfRegistry :: !(ResourceRegistry IO)
+  }
+
+instance HasLogFunc AppConfig where
+  logFuncL = lens appConfLogFunc $ \app logFunc -> app{appConfLogFunc = logFunc}
+
+instance HasResourceRegistry AppConfig where
+  registryL = lens appConfRegistry $ \app registry -> app{appConfRegistry = registry}

@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -63,39 +64,6 @@ readProtocolInfoCardano configFilePath = do
 -- TODO: Move upstream
 instance Exception ReadIncrementalErr
 
-readInitLedgerState
-  :: ( DecodeDisk blk (LedgerState blk)
-     , DecodeDisk blk (ChainDepState (BlockProtocol blk))
-     , DecodeDisk blk (AnnTip blk)
-     , Serialise (HeaderHash blk)
-     )
-  => DiskSnapshot
-  -> RIO (DbStreamerApp blk) (ExtLedgerState blk)
-readInitLedgerState diskSnapshot = do
-  ledgerDbFS <- ChainDB.cdbHasFSLgrDB . dsAppChainDbArgs <$> ask
-  ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
-  let
-    extLedgerStateDecoder =
-      decodeExtLedgerState (decodeDisk ccfg) (decodeDisk ccfg) (decodeDisk ccfg)
-  liftIO $
-    throwExceptT $
-      readSnapshot ledgerDbFS extLedgerStateDecoder decode diskSnapshot
-
--- mkIDbArgs
---   :: ( MonadIO m
---      , MonadReader env m
---      , HasResourceRegistry env
---      , HasLogFunc env
---      , Node.RunNode blk
---      , Show (Header blk)
---      )
---   => FilePath
---   -> ProtocolInfo IO blk
---   -> m (ImmutableDbArgs Identity IO blk)
--- mkIDbArgs dbDir protocolInfo = do
---   (iDbArgs, _, _, _) <- fromChainDbArgs . dbConfChainDbArgs <$> mkDbArgs dbDir protocolInfo
---   pure iDbArgs
-
 -- | Prepare arguments for chain db.
 mkDbArgs
   :: ( MonadIO m
@@ -129,8 +97,8 @@ mkDbArgs dbDir ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
       ChainDB.defaultArgs (Node.stdMkChainDbHasFS dbDir) diskPolicy
 
 withImmutableDb
-  :: ( MonadReader env m
-     , MonadIO m
+  :: ( MonadUnliftIO m
+     , MonadReader env m
      , GetPrevHash blk
      , ConvertRawHash blk
      , EncodeDisk blk blk
@@ -141,38 +109,64 @@ withImmutableDb
      , HasLogFunc env
      )
   => ImmutableDbArgs Identity IO blk
-  -> (ImmutableDB.ImmutableDB IO blk -> ReaderT env IO b)
+  -> (ImmutableDB.ImmutableDB IO blk -> m b)
   -> m b
 withImmutableDb iDbArgs action = do
-  env <- ask
-  res <- liftIO $ ImmutableDB.withDB (ImmutableDB.openDB iDbArgs runWithTempRegistry) $ \db ->
-    flip runReaderT env $ do
-      logDebug "Opened an immutable database"
-      action db
+  res <- withRunInIO $ \run ->
+    ImmutableDB.withDB (ImmutableDB.openDB iDbArgs runWithTempRegistry) $ \db ->
+      run $ do
+        logDebug "Opened an immutable database"
+        action db
   logDebug "Closed an immutable database"
   pure res
 
+readInitLedgerState
+  :: ( DecodeDisk blk (LedgerState blk)
+     , DecodeDisk blk (ChainDepState (BlockProtocol blk))
+     , DecodeDisk blk (AnnTip blk)
+     , Serialise (HeaderHash blk)
+     )
+  => DiskSnapshot
+  -> RIO (DbStreamerApp blk) (ExtLedgerState blk)
+readInitLedgerState diskSnapshot = do
+  ledgerDbFS <- ChainDB.cdbHasFSLgrDB . dsAppChainDbArgs <$> ask
+  ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
+  let
+    extLedgerStateDecoder =
+      decodeExtLedgerState (decodeDisk ccfg) (decodeDisk ccfg) (decodeDisk ccfg)
+  liftIO $
+    throwExceptT $
+      readSnapshot ledgerDbFS extLedgerStateDecoder decode diskSnapshot
+
+getInitLedgerState
+  :: ( DecodeDisk blk (LedgerState blk)
+     , DecodeDisk blk (ChainDepState (BlockProtocol blk))
+     , DecodeDisk blk (AnnTip blk)
+     , Serialise (HeaderHash blk)
+     )
+  => Maybe DiskSnapshot
+  -> RIO (DbStreamerApp blk) (ExtLedgerState blk)
+getInitLedgerState = \case
+  Nothing -> pInfoInitLedger . dsAppProtocolInfo <$> ask
+  Just diskSnapshot -> readInitLedgerState diskSnapshot
+
 runDbStreamerApp
-  :: FilePath
-  -- ^ Config file path
-  -> FilePath
-  -- ^ Db directory
-  -> ProtocolInfo IO blk
-  -> RIO (DbStreamerApp blk) a
-  -> RIO env a
-runDbStreamerApp confFilePath dbDir action = do
-  logFunc <- view logFuncL
-  registry <- view registryL
-  protocolInfo <- readProtocolInfoCardano confFilePath
-  dbArgs <- mkDbArgs dbDir protocolInfo
+  :: ( ExtLedgerState (CardanoBlock StandardCrypto)
+       -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) a
+     )
+  -> RIO AppConfig a
+runDbStreamerApp action = do
+  appConf <- ask
+  protocolInfo <- readProtocolInfoCardano (appConfFilePath appConf)
+  dbArgs <- mkDbArgs (appConfDbDir appConf) protocolInfo
   let (iDbArgs, _, _, _) = fromChainDbArgs dbArgs
   withImmutableDb iDbArgs $ \iDb ->
     let app =
           DbStreamerApp
-            { dsAppLogFunc = logFunc
-            , dsAppRegistry = registry
+            { dsAppLogFunc = appConfLogFunc appConf
+            , dsAppRegistry = appConfRegistry appConf
             , dsAppProtocolInfo = protocolInfo
             , dsAppChainDbArgs = dbArgs
             , dsAppIDb = iDb
             }
-     in runRIO app action
+     in runRIO app (getInitLedgerState (appConfDiskSnapshot appConf) >>= action)
