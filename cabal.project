@@ -21,6 +21,11 @@ benchmarks: True
 write-ghc-environment-files: always
 test-show-details: streaming
 
+package cardano-crypto-praos
+  flags: -external-libsodium-vrf
+
+package HsOpenSSL
+  flags: +use-pkg-config
 
 source-repository-package
   type: git

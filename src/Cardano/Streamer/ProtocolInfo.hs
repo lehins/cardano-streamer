@@ -81,7 +81,7 @@ mkDbArgs dbDir ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
   let
     chainDbArgs =
       Node.mkChainDbArgs registry InFuture.dontCheck pInfoConfig pInfoInitLedger chunkInfo defArgs
-  dbTracer <- mkTracer LevelInfo
+  dbTracer <- mkTracer (Just "Trace") LevelDebug
   logDebug $ "Preparing to open the database: " <> displayShow dbDir
   pure $
     chainDbArgs

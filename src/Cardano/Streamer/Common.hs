@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Cardano.Streamer.Common (
   DbStreamerApp (..),
@@ -9,7 +10,7 @@ module Cardano.Streamer.Common (
   throwShowExceptT,
   throwStringExceptT,
   mkTracer,
-  HasImmutableDb(..),
+  HasImmutableDb (..),
   HasResourceRegistry (..),
   RIO,
   runRIO,
@@ -35,12 +36,18 @@ class HasResourceRegistry env where
 
 mkTracer
   :: (MonadReader env m1, MonadIO m2, HasLogFunc env, Show a)
-  => LogLevel
+  => Maybe Text
+  -- ^ Optional prefix for tracing messages
+  -> LogLevel
   -> m1 (Tracer m2 a)
-mkTracer logLevel = do
+mkTracer mPrefix logLevel = do
   logFunc <- view logFuncL
   return $ Tracer $ \ev ->
-    flip runReaderT logFunc $ logGeneric mempty logLevel $ displayShow ev
+    let msg =
+          case mPrefix of
+            Just prefix -> "[" <> display prefix <> "] " <> displayShow ev
+            Nothing -> displayShow ev
+     in flip runReaderT logFunc $ logGeneric mempty logLevel msg
 
 throwExceptT :: (Exception e, MonadIO m) => ExceptT e m a -> m a
 throwExceptT m =

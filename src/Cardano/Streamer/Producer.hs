@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Cardano.Streamer.Producer where
 
@@ -7,6 +8,8 @@ import Cardano.Streamer.ProtocolInfo
 import Conduit
 import Control.Monad.Trans.Except
 import Ouroboros.Consensus.Block
+import Ouroboros.Consensus.Byron.Ledger.Block
+import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.HeaderValidation (
   AnnTip,
   HasAnnTip (..),
@@ -100,12 +103,36 @@ validateBlock prevLedger block = do
     runExcept $
       tickThenApplyLedgerResult ledgerCfg block prevLedger
 
+validatePrintBlock
+  :: ExtLedgerState (CardanoBlock StandardCrypto)
+  -> CardanoBlock StandardCrypto
+  -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (ExtLedgerState (CardanoBlock StandardCrypto))
+validatePrintBlock prevLedger block = do
+  case block of
+    BlockByron byronBlock ->
+      logSticky $
+        "["
+          <> displayShow (byronBlockSlotNo byronBlock)
+          <> "]: "
+          <> displayShow (byronBlockHash byronBlock)
+    _ -> pure ()
+  ledgerCfg <- ExtLedgerCfg . pInfoConfig . dsAppProtocolInfo <$> ask
+  either (throwString . show) (pure . lrResult) $
+    runExcept $
+      tickThenApplyLedgerResult ledgerCfg block prevLedger
+
 validateLedger
   :: LedgerSupportsProtocol b
   => ExtLedgerState b
   -> RIO (DbStreamerApp b) (ExtLedgerState b)
 validateLedger initLedgerState =
   runConduit $ foldBlocksWithState GetBlock initLedgerState validateBlock
+
+validatePrintLedger
+  :: ExtLedgerState (CardanoBlock StandardCrypto)
+  -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (ExtLedgerState (CardanoBlock StandardCrypto))
+validatePrintLedger initLedgerState =
+  runConduit $ foldBlocksWithState GetBlock initLedgerState validatePrintBlock
 
 runApp
   :: FilePath
@@ -119,7 +146,7 @@ runApp
   -> IO ()
 runApp dbDir confFilePath diskSnapshot verbose = do
   logOpts <- logOptionsHandle stdout verbose
-  withLogFunc logOpts $ \logFunc -> do
+  withLogFunc (setLogUseLoc False logOpts) $ \logFunc -> do
     withRegistry $ \registry -> do
       let appConf =
             AppConfig
@@ -129,4 +156,4 @@ runApp dbDir confFilePath diskSnapshot verbose = do
               , appConfLogFunc = logFunc
               , appConfRegistry = registry
               }
-      void $ runRIO appConf $ runDbStreamerApp validateLedger
+      void $ runRIO appConf $ runDbStreamerApp validatePrintLedger
