@@ -37,10 +37,13 @@ library
                      , cardano-binary
                      , cardano-crypto-class
                      , cardano-ledger-core
+                     , cardano-protocol-tpraos
                      , conduit
                      , contra-tracer
                      , ouroboros-consensus
                      , ouroboros-consensus-byron
+                     , ouroboros-consensus-shelley
+                     , ouroboros-consensus-protocol
                      , ouroboros-consensus-cardano
                      , ouroboros-consensus-diffusion
                      , ouroboros-network-api

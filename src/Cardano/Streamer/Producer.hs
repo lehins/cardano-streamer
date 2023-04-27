@@ -1,8 +1,11 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Cardano.Streamer.Producer where
 
+import Cardano.Ledger.Block
+import Cardano.Protocol.TPraos.BHeader
 import Cardano.Streamer.Common
 import Cardano.Streamer.ProtocolInfo
 import Conduit
@@ -21,6 +24,10 @@ import Ouroboros.Consensus.Ledger.Basics (LedgerResult (lrResult))
 import Ouroboros.Consensus.Ledger.Extended (ExtLedgerCfg (..), ExtLedgerState (headerState))
 import Ouroboros.Consensus.Ledger.SupportsProtocol (LedgerSupportsProtocol)
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
+import Ouroboros.Consensus.Protocol.Praos.Header hiding (Header)
+import Ouroboros.Consensus.Protocol.TPraos
+import Ouroboros.Consensus.Shelley.Ledger.Block hiding (Header)
+import Ouroboros.Consensus.Shelley.Protocol.Abstract (ShelleyProtocolHeader)
 import Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
@@ -108,18 +115,26 @@ validatePrintBlock
   -> CardanoBlock StandardCrypto
   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (ExtLedgerState (CardanoBlock StandardCrypto))
 validatePrintBlock prevLedger block = do
-  case block of
-    BlockByron byronBlock ->
-      logSticky $
-        "["
-          <> displayShow (byronBlockSlotNo byronBlock)
-          <> "]: "
-          <> displayShow (byronBlockHash byronBlock)
-    _ -> pure ()
+  logSticky $
+    "["
+      <> displayShow (getSlotNo block)
+      <> "]"
   ledgerCfg <- ExtLedgerCfg . pInfoConfig . dsAppProtocolInfo <$> ask
   either (throwString . show) (pure . lrResult) $
     runExcept $
       tickThenApplyLedgerResult ledgerCfg block prevLedger
+
+getSlotNo :: CardanoBlock StandardCrypto -> SlotNo
+getSlotNo = \case
+  BlockByron byronBlock -> byronBlockSlotNo byronBlock
+  BlockShelley shelleyBlock ->
+    bheaderSlotNo (bheader @(ShelleyProtocolHeader (TPraos StandardCrypto)) (shelleyBlockRaw shelleyBlock))
+
+-- BlockAllegra allegraBlock -> bheaderSlotNo (bheader @(BHeader StandardCrypto) (shelleyBlockRaw allegraBlock))
+-- BlockMary maryBlock -> bheaderSlotNo (bheader @(BHeader StandardCrypto) (shelleyBlockRaw maryBlock))
+-- BlockAlonzo alonzoBlock -> bheaderSlotNo (bheader @(BHeader StandardCrypto) (shelleyBlockRaw alonzoBlock))
+-- BlockBabbage babbageBlock -> hbSlotNo (bheader @(Header StandardCrypto) (shelleyBlockRaw babbageBlock))
+-- BlockConway conwayBlock -> hbSlotNo (bheader @(Header StandardCrypto) (shelleyBlockRaw conwayBlock))
 
 validateLedger
   :: LedgerSupportsProtocol b
