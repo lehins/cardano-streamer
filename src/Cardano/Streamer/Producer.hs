@@ -3,7 +3,9 @@
 
 module Cardano.Streamer.Producer where
 
+import Cardano.Crypto.Hash.Class (hashToStringAsHex)
 import Cardano.Ledger.Crypto
+import Cardano.Ledger.SafeHash (extractHash)
 import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
 import Cardano.Streamer.ProtocolInfo
@@ -26,6 +28,7 @@ import Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
 import Ouroboros.Consensus.Util.ResourceRegistry
+import RIO.FilePath
 
 sourceBlocks
   :: ( MonadIO m
@@ -109,14 +112,23 @@ validatePrintBlock
   -> CardanoBlock StandardCrypto
   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (ExtLedgerState (CardanoBlock StandardCrypto))
 validatePrintBlock prevLedger block = do
-  logSticky $
-    "["
-      <> displayShow (getSlotNo block)
-      <> "]"
+  let slotNo = getSlotNo block
+  logSticky $ "[" <> displayShow slotNo <> "]"
   ledgerCfg <- ExtLedgerCfg . pInfoConfig . dsAppProtocolInfo <$> ask
-  either (throwString . show) (pure . lrResult) $
-    runExcept $
-      tickThenApplyLedgerResult ledgerCfg block prevLedger
+  let result =
+        runExcept $
+          tickThenApplyLedgerResult ledgerCfg block prevLedger
+  case result of
+    Right lr -> pure $ lrResult lr
+    Left err -> do
+      let rawBlock = getRawBlock block
+          blockHashHex = hashToStringAsHex (extractHash (rawBlockHash rawBlock))
+      logError "Encountered an error while validating a block: "
+      mOutDir <- dsAppOutDir <$> ask
+      forM_ mOutDir $ \outDir ->
+        let fileName = show (unSlotNo slotNo) <> "_" <> blockHashHex <.> "cbor"
+         in writeFileBinary (outDir </> fileName) (rawBlockBytes rawBlock)
+      throwString . show $ err
 
 validateLedger
   :: LedgerSupportsProtocol b
@@ -136,12 +148,14 @@ runApp
   -- ^ Db directory
   -> FilePath
   -- ^ Config file path
+  -> Maybe FilePath
+  -- ^ Directory where requested files should be written to.
   -> Maybe DiskSnapshot
   -- ^ Where to start from
   -> Bool
   -- ^ Verbose logging?
   -> IO ()
-runApp dbDir confFilePath diskSnapshot verbose = do
+runApp dbDir confFilePath mOutDir diskSnapshot verbose = do
   logOpts <- logOptionsHandle stdout verbose
   withLogFunc (setLogUseLoc False logOpts) $ \logFunc -> do
     withRegistry $ \registry -> do
@@ -153,4 +167,6 @@ runApp dbDir confFilePath diskSnapshot verbose = do
               , appConfLogFunc = logFunc
               , appConfRegistry = registry
               }
-      void $ runRIO appConf $ runDbStreamerApp validatePrintLedger
+      void $ runRIO appConf $ runDbStreamerApp $ \initLedger -> do
+        app <- ask
+        runRIO (app{dsAppOutDir = mOutDir}) $ validatePrintLedger initLedger

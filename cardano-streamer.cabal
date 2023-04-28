@@ -80,6 +80,7 @@ executable cstreamer
                       -with-rtsopts=-N
   build-depends:      base
                     , cardano-streamer
+                    , ouroboros-consensus
   default-language: Haskell2010
 
 -- test-suite doctests

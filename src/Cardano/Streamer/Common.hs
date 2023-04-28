@@ -70,6 +70,8 @@ data DbStreamerApp blk = DbStreamerApp
   , dsAppProtocolInfo :: !(ProtocolInfo IO blk)
   , dsAppChainDbArgs :: !(ChainDB.ChainDbArgs Identity IO blk)
   , dsAppIDb :: !(ImmutableDB.ImmutableDB IO blk)
+  , dsAppOutDir :: !(Maybe FilePath)
+  -- ^ Output directory where to write files
   }
 
 class HasImmutableDb env blk | env -> blk where

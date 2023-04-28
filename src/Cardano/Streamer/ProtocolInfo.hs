@@ -129,14 +129,18 @@ readInitLedgerState
   => DiskSnapshot
   -> RIO (DbStreamerApp blk) (ExtLedgerState blk)
 readInitLedgerState diskSnapshot = do
+  logInfo $ "Reading initial ledger state: " <> displayShow diskSnapshot
   ledgerDbFS <- ChainDB.cdbHasFSLgrDB . dsAppChainDbArgs <$> ask
   ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
   let
     extLedgerStateDecoder =
       decodeExtLedgerState (decodeDisk ccfg) (decodeDisk ccfg) (decodeDisk ccfg)
-  liftIO $
+  ledgerState <- liftIO $
     throwExceptT $
       readSnapshot ledgerDbFS extLedgerStateDecoder decode diskSnapshot
+  let time = 0 :: Int
+  logInfo $ "Done reading the ledger state in " <> displayShow time
+  pure ledgerState
 
 getInitLedgerState
   :: ( DecodeDisk blk (LedgerState blk)
@@ -168,5 +172,11 @@ runDbStreamerApp action = do
             , dsAppProtocolInfo = protocolInfo
             , dsAppChainDbArgs = dbArgs
             , dsAppIDb = iDb
+            , dsAppOutDir = Nothing
             }
      in runRIO app (getInitLedgerState (appConfDiskSnapshot appConf) >>= action)
+
+
+
+-----------
+
