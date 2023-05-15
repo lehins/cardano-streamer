@@ -30,7 +30,7 @@ package HsOpenSSL
 source-repository-package
   type: git
   location: https://github.com/input-output-hk/cardano-node
-  tag: 4abf1e91d9aaec0a6214e6d1f4be2cddfbca458f
+  tag: f9e8e256d3d5dd68752ebca369330a8b76e01de7
   subdir:
     cardano-api
 

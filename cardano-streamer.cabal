@@ -58,6 +58,10 @@ library
                      , unliftio
                      , vector
 
+                     , cardano-ledger-binary
+                     , cardano-ledger-babbage
+                     , ouroboros-consensus-protocol
+
   default-language:    Haskell2010
   ghc-options:         -Wall
                        -Wincomplete-record-updates

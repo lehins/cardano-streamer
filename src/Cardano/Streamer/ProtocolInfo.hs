@@ -1,27 +1,39 @@
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Cardano.Streamer.ProtocolInfo where
 
 import qualified Cardano.Api as Api
+import Cardano.Ledger.BaseTypes (natVersion)
 import Cardano.Streamer.Common
 import Codec.Serialise (Serialise (decode))
 import Control.Monad.Trans.Except
 import Ouroboros.Consensus.Block (BlockProtocol, ConvertRawHash, GetPrevHash)
 import Ouroboros.Consensus.Block.NestedContent (NestedCtxt)
+import Ouroboros.Consensus.Byron.Node
 import Ouroboros.Consensus.Cardano.Block
+import Ouroboros.Consensus.Cardano.Node (
+  ProtocolTransitionParamsShelleyBased (..),
+  protocolInfoCardano,
+ )
 import Ouroboros.Consensus.Config (configCodec, configSecurityParam, configStorage)
 import qualified Ouroboros.Consensus.Fragment.InFuture as InFuture
 import Ouroboros.Consensus.HeaderValidation (AnnTip)
 import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState, decodeExtLedgerState)
+import Ouroboros.Consensus.Mempool (mkOverrides, noOverridesMeasure)
 import qualified Ouroboros.Consensus.Node as Node
 import qualified Ouroboros.Consensus.Node.InitStorage as Node
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import Ouroboros.Consensus.Protocol.Abstract (ChainDepState)
+import Ouroboros.Consensus.Shelley.Node.Praos
+import Ouroboros.Consensus.Shelley.Node.TPraos
 import qualified Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import Ouroboros.Consensus.Storage.ChainDB.Impl.Args (fromChainDbArgs)
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
@@ -135,9 +147,10 @@ readInitLedgerState diskSnapshot = do
   let
     extLedgerStateDecoder =
       decodeExtLedgerState (decodeDisk ccfg) (decodeDisk ccfg) (decodeDisk ccfg)
-  ledgerState <- liftIO $
-    throwExceptT $
-      readSnapshot ledgerDbFS extLedgerStateDecoder decode diskSnapshot
+  ledgerState <-
+    liftIO $
+      throwExceptT $
+        readSnapshot ledgerDbFS extLedgerStateDecoder decode diskSnapshot
   let time = 0 :: Int
   logInfo $ "Done reading the ledger state in " <> displayShow time
   pure ledgerState
@@ -176,7 +189,55 @@ runDbStreamerApp action = do
             }
      in runRIO app (getInitLedgerState (appConfDiskSnapshot appConf) >>= action)
 
-
-
 -----------
 
+mkProtocolInfoCardano
+  :: Api.GenesisConfig
+  -> ProtocolInfo
+      IO
+      (HardForkBlock (CardanoEras StandardCrypto))
+mkProtocolInfoCardano (Api.GenesisCardano dnc byronGenesis shelleyGenesis alonzoGenesis conwayGenesis) =
+  protocolInfoCardano
+    ProtocolParamsByron
+      { byronGenesis = byronGenesis
+      , byronPbftSignatureThreshold = PBftSignatureThreshold <$> Api.ncPBftSignatureThreshold dnc
+      , byronProtocolVersion = Api.ncByronProtocolVersion dnc
+      , byronSoftwareVersion = Api.ncByronSoftwareVersion dnc
+      , byronLeaderCredentials = Nothing
+      , byronMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
+      }
+    ProtocolParamsShelleyBased
+      { shelleyBasedGenesis = Api.scConfig shelleyGenesis
+      , shelleyBasedInitialNonce = Api.shelleyPraosNonce shelleyGenesis
+      , shelleyBasedLeaderCredentials = []
+      }
+    ProtocolParamsShelley
+      { shelleyProtVer = ProtVer (natVersion @3) 0
+      , shelleyMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
+      }
+    ProtocolParamsAllegra
+      { allegraProtVer = ProtVer (natVersion @4) 0
+      , allegraMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
+      }
+    ProtocolParamsMary
+      { maryProtVer = ProtVer (natVersion @5) 0
+      , maryMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
+      }
+    ProtocolParamsAlonzo
+      { alonzoProtVer = ProtVer (natVersion @7) 0
+      , alonzoMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
+      }
+    ProtocolParamsBabbage
+      { babbageProtVer = ProtVer (natVersion @9) 0
+      , babbageMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
+      }
+    ProtocolParamsConway
+      { conwayProtVer = ProtVer (natVersion @10) 0
+      , conwayMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
+      }
+    (Api.ncByronToShelley dnc)
+    (Api.ncShelleyToAllegra dnc)
+    (Api.ncAllegraToMary dnc)
+    (ProtocolTransitionParamsShelleyBased alonzoGenesis (Api.ncMaryToAlonzo dnc))
+    (ProtocolTransitionParamsShelleyBased () (Api.ncAlonzoToBabbage dnc))
+    (ProtocolTransitionParamsShelleyBased conwayGenesis (Api.ncBabbageToConway dnc))

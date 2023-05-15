@@ -55,13 +55,13 @@ throwExceptT m =
     Left exc -> throwIO exc
     Right res -> pure res
 
-throwStringExceptT :: MonadIO m => ExceptT String m a -> m a
+throwStringExceptT :: (HasCallStack, MonadIO m) => ExceptT String m a -> m a
 throwStringExceptT m =
   runExceptT m >>= \case
     Left exc -> throwString exc
     Right res -> pure res
 
-throwShowExceptT :: (Show e, MonadIO m) => ExceptT e m a -> m a
+throwShowExceptT :: (HasCallStack, Show e, MonadIO m) => ExceptT e m a -> m a
 throwShowExceptT m = throwStringExceptT $ withExceptT show m
 
 data DbStreamerApp blk = DbStreamerApp
