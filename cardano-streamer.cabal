@@ -20,6 +20,7 @@ library
   exposed-modules:     Cardano.Streamer.Common
                      , Cardano.Streamer.BlockInfo
                      , Cardano.Streamer.Producer
+                     , Cardano.Streamer.LedgerState
                      , Cardano.Streamer.ProtocolInfo
 
                     -- TODO: finish and reinstate when `io-classes-1.0` is in use.
@@ -44,8 +45,8 @@ library
                      , contra-tracer
                      , FailT
                      , ouroboros-consensus
-                     , ouroboros-consensus-byron
-                     , ouroboros-consensus-shelley
+                     -- , ouroboros-consensus-byron
+                     -- , ouroboros-consensus-shelley
                      , ouroboros-consensus-protocol
                      , ouroboros-consensus-cardano
                      , ouroboros-consensus-diffusion

@@ -11,8 +11,8 @@ repository cardano-haskell-packages
     d4a35cd3121aa00d18544bb0ac01c3e1691d618f462c46129271bccf39f7e8ee
 
 index-state:
-  , hackage.haskell.org 2023-03-29T00:00:00Z
-  , cardano-haskell-packages 2023-04-13T17:16:53Z
+  , hackage.haskell.org 2023-05-03T00:00:00Z
+  , cardano-haskell-packages 2023-05-10T17:00:09Z
 
 packages: .
 
@@ -27,27 +27,27 @@ package cardano-crypto-praos
 package HsOpenSSL
   flags: +use-pkg-config
 
-source-repository-package
-  type: git
-  location: https://github.com/input-output-hk/cardano-node
-  tag: f9e8e256d3d5dd68752ebca369330a8b76e01de7
-  subdir:
-    cardano-api
+-- source-repository-package
+--   type: git
+--   location: https://github.com/input-output-hk/cardano-node
+--   tag: f9e8e256d3d5dd68752ebca369330a8b76e01de7
+--   subdir:
+--     cardano-api
 
-source-repository-package
-  type: git
-  location: https://github.com/input-output-hk/cardano-base
-  tag: ae6bafce6b06296bb88c7bc5c0376d9836060fbf
-  --sha256: sha256-1hO02IrT/xUo9UDjm/v90laczuHlPS4UaZzpA5096Ig=
-  subdir:
-    cardano-crypto-class
-    cardano-crypto-praos
-    cardano-crypto-tests
+-- source-repository-package
+--   type: git
+--   location: https://github.com/input-output-hk/cardano-base
+--   tag: ae6bafce6b06296bb88c7bc5c0376d9836060fbf
+--   --sha256: sha256-1hO02IrT/xUo9UDjm/v90laczuHlPS4UaZzpA5096Ig=
+--   subdir:
+--     cardano-crypto-class
+--     cardano-crypto-praos
+--     cardano-crypto-tests
 
-source-repository-package
-  type: git
-  location: https://github.com/input-output-hk/cardano-ledger
-  tag: 0281b477ad93f46122a254c0d756c03542f3ed07
-  --sha256: sha256-XzwvmcmNcDbj9kla6Aha6SaMpidqJKTyezz+cY/kEYQ=
-  subdir:
-    libs/cardano-protocol-tpraos
+-- source-repository-package
+--   type: git
+--   location: https://github.com/input-output-hk/cardano-ledger
+--   tag: 0281b477ad93f46122a254c0d756c03542f3ed07
+--   --sha256: sha256-XzwvmcmNcDbj9kla6Aha6SaMpidqJKTyezz+cY/kEYQ=
+--   subdir:
+--     libs/cardano-protocol-tpraos

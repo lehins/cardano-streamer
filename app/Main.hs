@@ -9,6 +9,6 @@ main =
     "/home/lehins/iohk/chain"
     "/home/lehins/iohk/chain/config/mainnet-config.json"
     (Just "/home/lehins/tmp/")
-    (Just (DiskSnapshot 72316896 (Just "babbage_7")))
-    -- (Just (DiskSnapshot 87870047 (Just "db-analyser")))
-    True
+    --(Just (DiskSnapshot 72316896 (Just "babbage_7")))
+    (Just (DiskSnapshot 91242495 Nothing))
+    False
