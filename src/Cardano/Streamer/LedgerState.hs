@@ -5,7 +5,11 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 
-module Cardano.Streamer.LedgerState (encodeNewEpochState, applyNonByronNewEpochState) where
+module Cardano.Streamer.LedgerState (
+  encodeNewEpochState,
+  applyNonByronNewEpochState,
+  lookupReward,
+) where
 
 import Cardano.Ledger.Binary.Plain (Encoding, toCBOR)
 import Cardano.Ledger.CertState
