@@ -11,6 +11,7 @@
 module Cardano.Streamer.ProtocolInfo where
 
 import qualified Cardano.Api as Api
+import Cardano.Chain.Update (ApplicationName (..), SoftwareVersion (..))
 import Cardano.Ledger.BaseTypes (natVersion)
 import Cardano.Streamer.Common
 import Codec.Serialise (Serialise (decode))
@@ -62,7 +63,7 @@ instance Exception NodeConfigError
 
 readNodeConfig :: MonadIO m => FilePath -> m Api.NodeConfig
 readNodeConfig =
-  liftIO . throwExceptT . withExceptT NodeConfigError . Api.readNodeConfig . Api.NodeConfigFile
+  liftIO . throwExceptT . withExceptT NodeConfigError . Api.readNodeConfig . Api.File
 
 readCardanoGenesisConfig :: MonadIO m => Api.NodeConfig -> m Api.GenesisConfig
 readCardanoGenesisConfig =
@@ -202,7 +203,7 @@ mkProtocolInfoCardano (Api.GenesisCardano dnc byronGenesis shelleyGenesis alonzo
       { byronGenesis = byronGenesis
       , byronPbftSignatureThreshold = PBftSignatureThreshold <$> Api.ncPBftSignatureThreshold dnc
       , byronProtocolVersion = Api.ncByronProtocolVersion dnc
-      , byronSoftwareVersion = Api.ncByronSoftwareVersion dnc
+      , byronSoftwareVersion = byronSoftwareVersion
       , byronLeaderCredentials = Nothing
       , byronMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
       }
@@ -241,3 +242,9 @@ mkProtocolInfoCardano (Api.GenesisCardano dnc byronGenesis shelleyGenesis alonzo
     (ProtocolTransitionParamsShelleyBased alonzoGenesis (Api.ncMaryToAlonzo dnc))
     (ProtocolTransitionParamsShelleyBased () (Api.ncAlonzoToBabbage dnc))
     (ProtocolTransitionParamsShelleyBased conwayGenesis (Api.ncBabbageToConway dnc))
+  where
+    byronSoftwareVersion =
+      SoftwareVersion
+        { svAppName = ApplicationName "cardano-sl"
+        , svNumber = 1
+        }

@@ -6,9 +6,9 @@ import Ouroboros.Consensus.Storage.LedgerDB.Snapshots
 main :: IO ()
 main =
   runApp
-    "/home/lehins/iohk/chain"
-    "/home/lehins/iohk/chain/config/mainnet-config.json"
+    "/home/lehins/.local/share/Daedalus/mainnet/chain"
+    "/home/lehins/iohk/cardano-node/configuration/cardano/mainnet-config.json"
     (Just "/home/lehins/tmp/")
     --(Just (DiskSnapshot 72316896 (Just "babbage_7")))
-    (Just (DiskSnapshot 91242495 Nothing))
+    Nothing --(Just (DiskSnapshot 91242495 Nothing))
     False

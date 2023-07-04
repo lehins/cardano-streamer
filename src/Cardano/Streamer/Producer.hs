@@ -175,6 +175,7 @@ countTxOuts initLedgerState =
       ( void (sourceBlocksWithState GetBlock initLedgerState revalidatePrintBlock)
           .| foldMapMC (liftIO . evaluate . foldMap' (fromIntegral . tpOutsCount) . bpTxsPrecis)
       )
+
 writeNewEpochState :: (Crypto c, MonadIO m) => FilePath -> ExtLedgerState (CardanoBlock c) -> m ()
 writeNewEpochState filePath = liftIO . BSL.writeFile filePath . serialize . encodeNewEpochState
 
