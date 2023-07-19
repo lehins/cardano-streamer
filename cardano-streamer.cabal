@@ -74,6 +74,7 @@ library
 executable cstreamer
   main-is: Main.hs
   other-modules:
+      CLI
       Paths_cardano_streamer
   hs-source-dirs:     app
   ghc-options:        -Wall
@@ -87,56 +88,9 @@ executable cstreamer
   build-depends:      base
                     , cardano-streamer
                     , ouroboros-consensus
+                    , optparse-applicative
+                    , rio
   default-language: Haskell2010
-
--- test-suite doctests
---   type:             exitcode-stdio-1.0
---   hs-source-dirs:   tests
---   main-is:          doctests.hs
---   build-depends: base
---                , doctest >=0.15
---                , cardano-streamer
---   default-language:    Haskell2010
---   ghc-options:        -Wall
---                       -Wincomplete-record-updates
---                       -Wincomplete-uni-patterns
---                       -Wredundant-constraints
---                       -threaded
-
--- test-suite tests
---   type:               exitcode-stdio-1.0
---   hs-source-dirs:     tests
---   main-is:            Main.hs
---   other-modules:      Common
---                     , LibSpec
---                     , Spec
---   build-tool-depends: hspec-discover:hspec-discover
---   build-depends:      base
---                     , cardano-streamer
---                     , hspec
---                     , QuickCheck
-
---   default-language:   Haskell2010
---   ghc-options:        -Wall
---                       -Wincomplete-record-updates
---                       -Wincomplete-uni-patterns
---                       -Wredundant-constraints
---                       -fno-warn-orphans
---                       -threaded
---                       -with-rtsopts=-N2
-
--- benchmark bench
---   type:                exitcode-stdio-1.0
---   hs-source-dirs:      bench
---   main-is:             Bench.hs
---   ghc-options:         -Wall
---                        -threaded
---                        -O2
---                        -with-rtsopts=-N
---   build-depends:       base
---                      , criterion
---                      , cardano-streamer
---   default-language:    Haskell2010
 
 source-repository head
   type:     git
