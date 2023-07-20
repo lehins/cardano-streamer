@@ -69,10 +69,10 @@ readCardanoGenesisConfig :: MonadIO m => Api.NodeConfig -> m Api.GenesisConfig
 readCardanoGenesisConfig =
   liftIO . throwExceptT . Api.readCardanoGenesisConfig
 
-readProtocolInfoCardano :: MonadIO m => FilePath -> m (ProtocolInfo IO (CardanoBlock StandardCrypto))
+readProtocolInfoCardano :: MonadIO m => FilePath -> m (ProtocolInfo (CardanoBlock StandardCrypto))
 readProtocolInfoCardano configFilePath = do
   nodeConfig <- readNodeConfig configFilePath
-  Api.mkProtocolInfoCardano <$> readCardanoGenesisConfig nodeConfig
+  fst . Api.mkProtocolInfoCardano <$> readCardanoGenesisConfig nodeConfig
 
 -- TODO: Move upstream
 instance Exception ReadIncrementalErr
@@ -87,7 +87,7 @@ mkDbArgs
      , Node.RunNode blk
      )
   => FilePath
-  -> ProtocolInfo IO blk
+  -> ProtocolInfo blk
   -> m (ChainDB.ChainDbArgs Identity IO blk)
 mkDbArgs dbDir ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
   registry <- view registryL
@@ -192,59 +192,57 @@ runDbStreamerApp action = do
 
 -----------
 
-mkProtocolInfoCardano
-  :: Api.GenesisConfig
-  -> ProtocolInfo
-      IO
-      (HardForkBlock (CardanoEras StandardCrypto))
-mkProtocolInfoCardano (Api.GenesisCardano dnc byronGenesis shelleyGenesis alonzoGenesis conwayGenesis) =
-  protocolInfoCardano
-    ProtocolParamsByron
-      { byronGenesis = byronGenesis
-      , byronPbftSignatureThreshold = PBftSignatureThreshold <$> Api.ncPBftSignatureThreshold dnc
-      , byronProtocolVersion = Api.ncByronProtocolVersion dnc
-      , byronSoftwareVersion = byronSoftwareVersion
-      , byronLeaderCredentials = Nothing
-      , byronMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
-      }
-    ProtocolParamsShelleyBased
-      { shelleyBasedGenesis = Api.scConfig shelleyGenesis
-      , shelleyBasedInitialNonce = Api.shelleyPraosNonce shelleyGenesis
-      , shelleyBasedLeaderCredentials = []
-      }
-    ProtocolParamsShelley
-      { shelleyProtVer = ProtVer (natVersion @3) 0
-      , shelleyMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
-      }
-    ProtocolParamsAllegra
-      { allegraProtVer = ProtVer (natVersion @4) 0
-      , allegraMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
-      }
-    ProtocolParamsMary
-      { maryProtVer = ProtVer (natVersion @5) 0
-      , maryMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
-      }
-    ProtocolParamsAlonzo
-      { alonzoProtVer = ProtVer (natVersion @7) 0
-      , alonzoMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
-      }
-    ProtocolParamsBabbage
-      { babbageProtVer = ProtVer (natVersion @9) 0
-      , babbageMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
-      }
-    ProtocolParamsConway
-      { conwayProtVer = ProtVer (natVersion @10) 0
-      , conwayMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
-      }
-    (Api.ncByronToShelley dnc)
-    (Api.ncShelleyToAllegra dnc)
-    (Api.ncAllegraToMary dnc)
-    (ProtocolTransitionParamsShelleyBased alonzoGenesis (Api.ncMaryToAlonzo dnc))
-    (ProtocolTransitionParamsShelleyBased () (Api.ncAlonzoToBabbage dnc))
-    (ProtocolTransitionParamsShelleyBased conwayGenesis (Api.ncBabbageToConway dnc))
-  where
-    byronSoftwareVersion =
-      SoftwareVersion
-        { svAppName = ApplicationName "cardano-sl"
-        , svNumber = 1
-        }
+-- mkProtocolInfoCardano
+--   :: Api.GenesisConfig
+--   -> ProtocolInfo (HardForkBlock (CardanoEras StandardCrypto))
+-- mkProtocolInfoCardano (Api.GenesisCardano dnc byronGenesis shelleyGenesis alonzoGenesis conwayGenesis) =
+--   protocolInfoCardano
+--     ProtocolParamsByron
+--       { byronGenesis = byronGenesis
+--       , byronPbftSignatureThreshold = PBftSignatureThreshold <$> Api.ncPBftSignatureThreshold dnc
+--       , byronProtocolVersion = Api.ncByronProtocolVersion dnc
+--       , byronSoftwareVersion = byronSoftwareVersion
+--       , byronLeaderCredentials = Nothing
+--       , byronMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
+--       }
+--     ProtocolParamsShelleyBased
+--       { shelleyBasedGenesis = Api.scConfig shelleyGenesis
+--       , shelleyBasedInitialNonce = Api.shelleyPraosNonce shelleyGenesis
+--       , shelleyBasedLeaderCredentials = []
+--       }
+--     ProtocolParamsShelley
+--       { shelleyProtVer = ProtVer (natVersion @3) 0
+--       , shelleyMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
+--       }
+--     ProtocolParamsAllegra
+--       { allegraProtVer = ProtVer (natVersion @4) 0
+--       , allegraMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
+--       }
+--     ProtocolParamsMary
+--       { maryProtVer = ProtVer (natVersion @5) 0
+--       , maryMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
+--       }
+--     ProtocolParamsAlonzo
+--       { alonzoProtVer = ProtVer (natVersion @7) 0
+--       , alonzoMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
+--       }
+--     ProtocolParamsBabbage
+--       { babbageProtVer = ProtVer (natVersion @9) 0
+--       , babbageMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
+--       }
+--     ProtocolParamsConway
+--       { conwayProtVer = ProtVer (natVersion @10) 0
+--       , conwayMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
+--       }
+--     (Api.ncByronToShelley dnc)
+--     (Api.ncShelleyToAllegra dnc)
+--     (Api.ncAllegraToMary dnc)
+--     (ProtocolTransitionParamsShelleyBased alonzoGenesis (Api.ncMaryToAlonzo dnc))
+--     (ProtocolTransitionParamsShelleyBased () (Api.ncAlonzoToBabbage dnc))
+--     (ProtocolTransitionParamsShelleyBased conwayGenesis (Api.ncBabbageToConway dnc))
+--   where
+--     byronSoftwareVersion =
+--       SoftwareVersion
+--         { svAppName = ApplicationName "cardano-sl"
+--         , svNumber = 1
+--         }

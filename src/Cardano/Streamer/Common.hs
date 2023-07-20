@@ -67,7 +67,7 @@ throwShowExceptT m = throwStringExceptT $ withExceptT show m
 data DbStreamerApp blk = DbStreamerApp
   { dsAppLogFunc :: !LogFunc
   , dsAppRegistry :: !(ResourceRegistry IO)
-  , dsAppProtocolInfo :: !(ProtocolInfo IO blk)
+  , dsAppProtocolInfo :: !(ProtocolInfo blk)
   , dsAppChainDbArgs :: !(ChainDB.ChainDbArgs Identity IO blk)
   , dsAppIDb :: !(ImmutableDB.ImmutableDB IO blk)
   , dsAppOutDir :: !(Maybe FilePath)

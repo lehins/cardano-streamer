@@ -24,6 +24,9 @@ import Ouroboros.Consensus.Byron.Ledger.Ledger
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Ledger.Extended
 import Ouroboros.Consensus.Shelley.Ledger (shelleyLedgerState)
+import Cardano.Chain.Block (ChainValidationState)
+import RIO
+import qualified RIO.Map as Map
 
 encodeNewEpochState :: Crypto c => ExtLedgerState (CardanoBlock c) -> Encoding
 encodeNewEpochState extLedgerState =
@@ -35,6 +38,22 @@ encodeNewEpochState extLedgerState =
     LedgerStateAlonzo ls -> toCBOR (shelleyLedgerState ls)
     LedgerStateBabbage ls -> toCBOR (shelleyLedgerState ls)
     LedgerStateConway ls -> toCBOR (shelleyLedgerState ls)
+
+applyNewEpochState
+  :: Crypto c
+  => (ChainValidationState -> a)
+  -> (forall era. Era era => NewEpochState era -> a)
+  -> ExtLedgerState (CardanoBlock c)
+  -> a
+applyNewEpochState fByronBased fShelleyBased extLedgerState =
+  case ledgerState extLedgerState of
+    LedgerStateByron ls -> fByronBased (byronLedgerState ls)
+    LedgerStateShelley ls -> fShelleyBased (shelleyLedgerState ls)
+    LedgerStateAllegra ls -> fShelleyBased (shelleyLedgerState ls)
+    LedgerStateMary ls -> fShelleyBased (shelleyLedgerState ls)
+    LedgerStateAlonzo ls -> fShelleyBased (shelleyLedgerState ls)
+    LedgerStateBabbage ls -> fShelleyBased (shelleyLedgerState ls)
+    LedgerStateConway ls -> fShelleyBased (shelleyLedgerState ls)
 
 applyNonByronNewEpochState
   :: Crypto c
@@ -51,7 +70,18 @@ applyNonByronNewEpochState f extLedgerState =
     LedgerStateBabbage ls -> Just $ f (shelleyLedgerState ls)
     LedgerStateConway ls -> Just $ f (shelleyLedgerState ls)
 
-lookupReward :: Credential 'Staking (EraCrypto era) -> NewEpochState era -> Maybe Coin
-lookupReward cred nes =
+lookupStakeCredentials
+  :: Set (Credential 'Staking (EraCrypto era))
+  -> NewEpochState era
+  -> UM.StakeCredentials (EraCrypto era)
+lookupStakeCredentials creds nes =
   let um = dsUnified (certDState (lsCertState (esLState (nesEs nes))))
-   in fromCompact . rdReward <$> UM.lookup cred (UM.RewardDeposits um)
+   in UM.domRestrictedStakeCredentials creds um
+
+lookupReward :: Set (Credential 'Staking (EraCrypto era)) -> NewEpochState era -> Maybe Coin
+lookupReward creds nes = guard (Map.null rewards) >> pure (fold rewards)
+  where
+    rewards = scRewards $ lookupStakeCredentials creds nes
+
+-- lookupReward :: Set (Credential 'Staking (EraCrypto era)) -> NewEpochState era -> Maybe Coin
+-- lookupReward = undefined

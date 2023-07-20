@@ -223,8 +223,8 @@ runApp dbDir confFilePath mOutDir diskSnapshot verbose = do
       void $ runRIO appConf $ runDbStreamerApp $ \initLedger -> do
         app <- ask
         -- -- Validate:
-        -- runRIO (app{dsAppOutDir = mOutDir}) $ validatePrintLedger initLedger
+        runRIO (app{dsAppOutDir = mOutDir}) $ validatePrintLedger initLedger
         -- -- TxOuts:
         -- total <- runRIO (app{dsAppOutDir = mOutDir}) $ countTxOuts initLedger
         -- logInfo $ "Total TxOuts: " <> displayShow total
-        runRIO (app{dsAppOutDir = mOutDir}) $ revalidateWriteNewEpochState initLedger
+        -- runRIO (app{dsAppOutDir = mOutDir}) $ revalidateWriteNewEpochState initLedger
