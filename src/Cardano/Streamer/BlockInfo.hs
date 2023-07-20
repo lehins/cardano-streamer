@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Cardano.Streamer.BlockInfo where
 
@@ -84,21 +85,40 @@ instance SafeToHash (RawBlock c) where
 
 instance HashAnnotated (RawBlock c) EraIndependentBlockBody c
 
+applyBlock
+  :: (ByronBlock -> a)
+  -> ( forall era
+        . (EraSegWits era)
+       => BlockEra
+       -> ShelleyBlock (TPraos (EraCrypto era)) era
+       -> a
+     )
+  -> ( forall era
+        . (EraSegWits era)
+       => BlockEra
+       -> ShelleyBlock (Praos (EraCrypto era)) era
+       -> a
+     )
+  -> CardanoBlock StandardCrypto
+  -> a
+applyBlock applyBronBlock applyTPraosBlock applyPraosBlock = \case
+  BlockByron byronBlock -> applyBronBlock byronBlock
+  BlockShelley shelleyBlock -> applyTPraosBlock Shelley shelleyBlock
+  BlockAllegra allegraBlock -> applyTPraosBlock Allegra allegraBlock
+  BlockMary maryBlock -> applyTPraosBlock Mary maryBlock
+  BlockAlonzo alonzoBlock -> applyTPraosBlock Alonzo alonzoBlock
+  BlockBabbage babbageBlock -> applyPraosBlock Babbage babbageBlock
+  BlockConway conwayBlock -> applyPraosBlock Conway conwayBlock
+
 getRawBlock :: CardanoBlock StandardCrypto -> RawBlock StandardCrypto
 getRawBlock =
-  mkRawBlock . \case
-    BlockByron byronBlock ->
+  mkRawBlock . applyBlock byronBlockBytes blockBytes blockBytes
+  where
+    byronBlockBytes byronBlock =
       case byronBlockRaw byronBlock of
         B.ABOBBlock abBlock -> B.blockAnnotation abBlock
         B.ABOBBoundary abBlock -> B.boundaryAnnotation abBlock
-    BlockShelley shelleyBlock -> blockBytes shelleyBlock
-    BlockAllegra allegraBlock -> blockBytes allegraBlock
-    BlockMary maryBlock -> blockBytes maryBlock
-    BlockAlonzo alonzoBlock -> blockBytes alonzoBlock
-    BlockBabbage babbageBlock -> blockBytes babbageBlock
-    BlockConway conwayBlock -> blockBytes conwayBlock
-  where
-    blockBytes block =
+    blockBytes _ block =
       case shelleyBlockRaw block of
         Block' _ _ bs -> toStrictBytes bs
     mkRawBlock bs =
@@ -111,56 +131,52 @@ getRawBlock =
        in rb{rawBlockHash = safeHash}
 
 getBlockPrecis :: CardanoBlock StandardCrypto -> BlockPrecis
-getBlockPrecis = \case
-  BlockByron byronBlock ->
-    case byronBlockRaw byronBlock of
-      B.ABOBBlock abBlock ->
-        let bbHeader = B.blockHeader abBlock
-            bbBody = B.blockBody abBlock
-            bbBlockSize = BS.length (B.blockAnnotation abBlock)
-            bbHeaderSize = BS.length (B.headerAnnotation bbHeader)
-            B.ATxPayload atxs = B.bodyTxPayload bbBody
-            byronATxAuxPrecis atx =
-              let tx = B.taTx atx
-               in TxPrecis
-                    { tpSize = fromIntegral $ BS.length (B.aTaAnnotation atx)
-                    , tpInsCount = fromIntegral $ length (B.txInputs tx)
-                    , tpOutsCount = fromIntegral $ length (B.txOutputs tx)
-                    }
-            bProtVer = fromByronProtocolVersion (B.headerProtocolVersion bbHeader)
-         in BlockPrecis
-              { bpEra = Byron
-              , bpSlotNo = byronBlockSlotNo byronBlock
-              , bpBlockNo = 0 -- TODO: compute from bpAbsBlockNo and slotNo
-              -- , bpAbsBlockNo = absBlockNo
-              , bpProtVer = Just bProtVer
-              , bpBlockSize = bbBlockSize
-              , bpBlockBodySize = bbBlockSize - bbHeaderSize
-              , bpBlockHeaderSize = bbHeaderSize
-              , bpTxsPrecis = V.fromList $! byronATxAuxPrecis <$!> atxs
-              }
-      B.ABOBBoundary abBlock ->
-        let bbHeader = B.boundaryHeader abBlock
-            bbBody = B.boundaryBody abBlock
-            bbHeaderSize = BS.length (B.boundaryHeaderAnnotation bbHeader)
-         in BlockPrecis
-              { bpEra = Byron
-              , -- , bpEpochNo = EpochNo (B.boundaryEpoch bbHeader)
-                bpSlotNo = byronBlockSlotNo byronBlock
-              , bpBlockNo = 0 -- TODO: compute from absBlockNo and slotNo
-              -- , bpAbsBlockNo = absBlockNo
-              , bpProtVer = Nothing
-              , bpBlockSize = fromIntegral (B.boundaryBlockLength abBlock) --
-              , bpBlockBodySize = BS.length (B.boundaryBodyAnnotation bbBody)
-              , bpBlockHeaderSize = bbHeaderSize
-              , bpTxsPrecis = V.empty
-              }
-  BlockShelley shelleyBlock -> getTPraosBlockPrecis Shelley shelleyBlock
-  BlockAllegra allegraBlock -> getTPraosBlockPrecis Allegra allegraBlock
-  BlockMary maryBlock -> getTPraosBlockPrecis Mary maryBlock
-  BlockAlonzo alonzoBlock -> getTPraosBlockPrecis Alonzo alonzoBlock
-  BlockBabbage babbageBlock -> getPraosBlockPrecis Babbage babbageBlock
-  BlockConway conwayBlock -> getPraosBlockPrecis Conway conwayBlock
+getBlockPrecis =
+  applyBlock getByronBlockPrecis getTPraosBlockPrecis getPraosBlockPrecis
+  where
+    getByronBlockPrecis byronBlock =
+      case byronBlockRaw byronBlock of
+        B.ABOBBlock abBlock ->
+          let bbHeader = B.blockHeader abBlock
+              bbBody = B.blockBody abBlock
+              bbBlockSize = BS.length (B.blockAnnotation abBlock)
+              bbHeaderSize = BS.length (B.headerAnnotation bbHeader)
+              B.ATxPayload atxs = B.bodyTxPayload bbBody
+              byronATxAuxPrecis atx =
+                let tx = B.taTx atx
+                 in TxPrecis
+                      { tpSize = fromIntegral $ BS.length (B.aTaAnnotation atx)
+                      , tpInsCount = fromIntegral $ length (B.txInputs tx)
+                      , tpOutsCount = fromIntegral $ length (B.txOutputs tx)
+                      }
+              bProtVer = fromByronProtocolVersion (B.headerProtocolVersion bbHeader)
+           in BlockPrecis
+                { bpEra = Byron
+                , bpSlotNo = byronBlockSlotNo byronBlock
+                , bpBlockNo = 0 -- TODO: compute from bpAbsBlockNo and slotNo
+                -- , bpAbsBlockNo = absBlockNo
+                , bpProtVer = Just bProtVer
+                , bpBlockSize = bbBlockSize
+                , bpBlockBodySize = bbBlockSize - bbHeaderSize
+                , bpBlockHeaderSize = bbHeaderSize
+                , bpTxsPrecis = V.fromList $! byronATxAuxPrecis <$!> atxs
+                }
+        B.ABOBBoundary abBlock ->
+          let bbHeader = B.boundaryHeader abBlock
+              bbBody = B.boundaryBody abBlock
+              bbHeaderSize = BS.length (B.boundaryHeaderAnnotation bbHeader)
+           in BlockPrecis
+                { bpEra = Byron
+                , -- , bpEpochNo = EpochNo (B.boundaryEpoch bbHeader)
+                  bpSlotNo = byronBlockSlotNo byronBlock
+                , bpBlockNo = 0 -- TODO: compute from absBlockNo and slotNo
+                -- , bpAbsBlockNo = absBlockNo
+                , bpProtVer = Nothing
+                , bpBlockSize = fromIntegral (B.boundaryBlockLength abBlock) --
+                , bpBlockBodySize = BS.length (B.boundaryBodyAnnotation bbBody)
+                , bpBlockHeaderSize = bbHeaderSize
+                , bpTxsPrecis = V.empty
+                }
 
 getTPraosBlockPrecis
   :: (EraSegWits era, Crypto c)
@@ -224,15 +240,28 @@ getTxPrecis tx =
     , tpOutsCount = fromIntegral $ length $ tx ^. bodyTxL . outputsTxBodyL
     }
 
+applyBlockTxs
+  :: ([B.ATxAux ByteString] -> a)
+  -> (forall era. EraSegWits era => [Tx era] -> a)
+  -> CardanoBlock StandardCrypto
+  -> a
+applyBlockTxs applyByronTxs applyNonByronTxs =
+  applyBlock applyByronBlock applyNonByronBlock applyNonByronBlock
+  where
+    applyByronBlock byronBlock =
+      case byronBlockRaw byronBlock of
+        B.ABOBBlock abBlock ->
+          let B.ATxPayload atxs = B.bodyTxPayload (B.blockBody abBlock)
+           in applyByronTxs atxs
+        B.ABOBBoundary _abBlock -> applyByronTxs []
+    applyNonByronBlock _ = applyNonByronTxs . toList . fromTxSeq . bbody . shelleyBlockRaw
+
 getSlotNo :: CardanoBlock StandardCrypto -> SlotNo
-getSlotNo = \case
-  BlockByron byronBlock -> byronBlockSlotNo byronBlock
-  BlockShelley shelleyBlock -> bheaderSlotNo $ getTPraosBHeaderBody shelleyBlock
-  BlockAllegra allegraBlock -> bheaderSlotNo $ getTPraosBHeaderBody allegraBlock
-  BlockMary maryBlock -> bheaderSlotNo $ getTPraosBHeaderBody maryBlock
-  BlockAlonzo alonzoBlock -> bheaderSlotNo $ getTPraosBHeaderBody alonzoBlock
-  BlockBabbage babbageBlock -> hbSlotNo $ getPraosBHeaderBody babbageBlock
-  BlockConway conwayBlock -> hbSlotNo $ getPraosBHeaderBody conwayBlock
+getSlotNo =
+  applyBlock
+    byronBlockSlotNo
+    (\_ -> bheaderSlotNo . getTPraosBHeaderBody)
+    (\_ -> hbSlotNo . getPraosBHeaderBody)
 
 getTPraosBHeaderBody :: Crypto c => ShelleyBlock (TPraos c) era -> BHBody c
 getTPraosBHeaderBody block =

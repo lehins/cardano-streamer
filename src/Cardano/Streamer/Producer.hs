@@ -133,9 +133,10 @@ validatePrintBlock !prevLedger !block = do
           blockHashHex = hashToStringAsHex (extractHash (rawBlockHash rawBlock))
       logError "Encountered an error while validating a block: "
       mOutDir <- dsAppOutDir <$> ask
-      forM_ mOutDir $ \outDir ->
-        let fileName = show (unSlotNo slotNo) <> "_" <> blockHashHex <.> "cbor"
-         in writeFileBinary (outDir </> fileName) (rawBlockBytes rawBlock)
+      forM_ mOutDir $ \outDir -> do
+        let fileNameBlock = show (unSlotNo slotNo) <> "_" <> blockHashHex <.> "cbor"
+        writeFileBinary (outDir </> fileNameBlock) (rawBlockBytes rawBlock)
+        applyBlockTxs (liftIO . print) (liftIO . print) block
       throwString . show $ err
 
 validateLedger
