@@ -3,6 +3,8 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Cardano.Streamer.BlockInfo where
 
@@ -10,6 +12,7 @@ import qualified Cardano.Chain.Block as B
 import qualified Cardano.Chain.UTxO as B
 import qualified Cardano.Chain.Update as B
 import Cardano.Ledger.BaseTypes
+import Cardano.Ledger.Binary
 import Cardano.Ledger.Block
 import Cardano.Ledger.Core
 import Cardano.Ledger.Crypto
@@ -263,6 +266,13 @@ getSlotNo =
     (\_ -> bheaderSlotNo . getTPraosBHeaderBody)
     (\_ -> hbSlotNo . getPraosBHeaderBody)
 
+getSlotNoWithEra :: CardanoBlock StandardCrypto -> (BlockEra, SlotNo)
+getSlotNoWithEra =
+  applyBlock
+    ((,) Byron . byronBlockSlotNo)
+    (\era -> (,) era . bheaderSlotNo . getTPraosBHeaderBody)
+    (\era -> (,) era . hbSlotNo . getPraosBHeaderBody)
+
 getTPraosBHeaderBody :: Crypto c => ShelleyBlock (TPraos c) era -> BHBody c
 getTPraosBHeaderBody block =
   case bheader (shelleyBlockRaw block) of
@@ -270,3 +280,6 @@ getTPraosBHeaderBody block =
 
 getPraosBHeaderBody :: Crypto c => ShelleyBlock (Praos c) era -> HeaderBody c
 getPraosBHeaderBody block = headerBody (bheader (shelleyBlockRaw block))
+
+writeTx :: forall era m. (EraTx era, MonadIO m) => FilePath -> Tx era -> m ()
+writeTx fp = liftIO . BSL.writeFile fp . serialize (eraProtVerLow @era)

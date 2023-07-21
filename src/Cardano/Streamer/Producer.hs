@@ -10,7 +10,7 @@ import Cardano.Ledger.Crypto
 import Cardano.Ledger.SafeHash (extractHash)
 import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
-import Cardano.Streamer.LedgerState (encodeNewEpochState)
+import Cardano.Streamer.LedgerState (encodeNewEpochState, writeNewEpochState)
 import Cardano.Streamer.ProtocolInfo
 import Conduit
 import Control.Monad.Trans.Except
@@ -118,10 +118,10 @@ validatePrintBlock
   -> CardanoBlock StandardCrypto
   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (ExtLedgerState (CardanoBlock StandardCrypto))
 validatePrintBlock !prevLedger !block = do
-  let slotNo = getSlotNo block
+  let (era, slotNo) = getSlotNoWithEra block
   when (unSlotNo slotNo `mod` 10 == 0) $
     logSticky $
-      "[" <> displayShow slotNo <> "]"
+      displayShow era <> ":[" <> displayShow slotNo <> "]"
   ledgerCfg <- ExtLedgerCfg . pInfoConfig . dsAppProtocolInfo <$> ask
   let result =
         runExcept $
@@ -134,9 +134,15 @@ validatePrintBlock !prevLedger !block = do
       logError "Encountered an error while validating a block: "
       mOutDir <- dsAppOutDir <$> ask
       forM_ mOutDir $ \outDir -> do
-        let fileNameBlock = show (unSlotNo slotNo) <> "_" <> blockHashHex <.> "cbor"
-        writeFileBinary (outDir </> fileNameBlock) (rawBlockBytes rawBlock)
-        applyBlockTxs (liftIO . print) (liftIO . print) block
+        let prefix = outDir </> show (unSlotNo slotNo) <> "_" <> blockHashHex
+            mkTxFileName ix = prefix <> "#" <> show ix <.> "cbor"
+            fileNameBlock = prefix <.> "cbor"
+        writeFileBinary fileNameBlock (rawBlockBytes rawBlock)
+        writeNewEpochState (outDir </> show (unSlotNo slotNo) <.> "cbor") prevLedger
+        applyBlockTxs
+          (liftIO . print)
+          (zipWithM_ (\ix -> writeTx (mkTxFileName ix)) [0 :: Int ..])
+          block
       throwString . show $ err
 
 validateLedger
@@ -177,12 +183,8 @@ countTxOuts initLedgerState =
           .| foldMapMC (liftIO . evaluate . foldMap' (fromIntegral . tpOutsCount) . bpTxsPrecis)
       )
 
-writeNewEpochState :: (Crypto c, MonadIO m) => FilePath -> ExtLedgerState (CardanoBlock c) -> m ()
-writeNewEpochState filePath = liftIO . BSL.writeFile filePath . serialize . encodeNewEpochState
-
-
-revalidateWriteNewEpochState ::
-     ExtLedgerState (CardanoBlock StandardCrypto)
+revalidateWriteNewEpochState
+  :: ExtLedgerState (CardanoBlock StandardCrypto)
   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) ()
 revalidateWriteNewEpochState initLedgerState = do
   (extLedgerState, mBlockPrecis) <-
@@ -225,7 +227,8 @@ runApp dbDir confFilePath mOutDir diskSnapshot verbose = do
         app <- ask
         -- -- Validate:
         runRIO (app{dsAppOutDir = mOutDir}) $ validatePrintLedger initLedger
-        -- -- TxOuts:
-        -- total <- runRIO (app{dsAppOutDir = mOutDir}) $ countTxOuts initLedger
-        -- logInfo $ "Total TxOuts: " <> displayShow total
-        -- runRIO (app{dsAppOutDir = mOutDir}) $ revalidateWriteNewEpochState initLedger
+
+-- -- TxOuts:
+-- total <- runRIO (app{dsAppOutDir = mOutDir}) $ countTxOuts initLedger
+-- logInfo $ "Total TxOuts: " <> displayShow total
+-- runRIO (app{dsAppOutDir = mOutDir}) $ revalidateWriteNewEpochState initLedger

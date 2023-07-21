@@ -8,41 +8,40 @@
 module Cardano.Streamer.LedgerState (
   encodeNewEpochState,
   applyNonByronNewEpochState,
+  applyNewEpochState,
   lookupReward,
+  writeNewEpochState,
 ) where
 
-import Cardano.Ledger.Binary.Plain (Encoding, toCBOR)
+import Cardano.Chain.Block (ChainValidationState)
+import Cardano.Ledger.Binary.Plain as Plain (Encoding, ToCBOR, serialize, toCBOR)
 import Cardano.Ledger.CertState
 import Cardano.Ledger.Coin
 import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Crypto
 import Cardano.Ledger.Keys
+import Cardano.Ledger.Shelley.Governance (EraGovernance)
 import Cardano.Ledger.Shelley.LedgerState
 import Cardano.Ledger.UMap as UM
+import qualified Data.ByteString.Lazy as BSL
 import Ouroboros.Consensus.Byron.Ledger.Ledger
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Ledger.Extended
 import Ouroboros.Consensus.Shelley.Ledger (shelleyLedgerState)
-import Cardano.Chain.Block (ChainValidationState)
 import RIO
 import qualified RIO.Map as Map
 
 encodeNewEpochState :: Crypto c => ExtLedgerState (CardanoBlock c) -> Encoding
-encodeNewEpochState extLedgerState =
-  case ledgerState extLedgerState of
-    LedgerStateByron ls -> toCBOR (byronLedgerState ls)
-    LedgerStateShelley ls -> toCBOR (shelleyLedgerState ls)
-    LedgerStateAllegra ls -> toCBOR (shelleyLedgerState ls)
-    LedgerStateMary ls -> toCBOR (shelleyLedgerState ls)
-    LedgerStateAlonzo ls -> toCBOR (shelleyLedgerState ls)
-    LedgerStateBabbage ls -> toCBOR (shelleyLedgerState ls)
-    LedgerStateConway ls -> toCBOR (shelleyLedgerState ls)
+encodeNewEpochState = applyNewEpochState toCBOR toCBOR
+
+writeNewEpochState :: (Crypto c, MonadIO m) => FilePath -> ExtLedgerState (CardanoBlock c) -> m ()
+writeNewEpochState fp = liftIO . BSL.writeFile fp . Plain.serialize . encodeNewEpochState
 
 applyNewEpochState
   :: Crypto c
   => (ChainValidationState -> a)
-  -> (forall era. Era era => NewEpochState era -> a)
+  -> (forall era. ToCBOR (NewEpochState era)  => NewEpochState era -> a)
   -> ExtLedgerState (CardanoBlock c)
   -> a
 applyNewEpochState fByronBased fShelleyBased extLedgerState =
@@ -57,7 +56,7 @@ applyNewEpochState fByronBased fShelleyBased extLedgerState =
 
 applyNonByronNewEpochState
   :: Crypto c
-  => (forall era. Era era => NewEpochState era -> a)
+  => (forall era. (EraTxOut era, EraGovernance era) => NewEpochState era -> a)
   -> ExtLedgerState (CardanoBlock c)
   -> Maybe a
 applyNonByronNewEpochState f extLedgerState =
