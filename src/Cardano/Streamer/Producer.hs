@@ -129,6 +129,8 @@ validatePrintBlock !prevLedger !block = do
   case result of
     Right lr -> pure $ lrResult lr
     Left err -> do
+      logSticky $
+        displayShow era <> ":[" <> displayShow slotNo <> "]"
       let rawBlock = getRawBlock block
           blockHashHex = hashToStringAsHex (extractHash (rawBlockHash rawBlock))
       logError "Encountered an error while validating a block: "
