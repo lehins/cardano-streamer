@@ -43,6 +43,7 @@ library
                      , cardano-ledger-shelley
                      , cardano-protocol-tpraos
                      , conduit
+                     , containers
                      , contra-tracer
                      , FailT
                      , ouroboros-consensus

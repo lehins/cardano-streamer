@@ -5,16 +5,14 @@
 module Cardano.Streamer.Producer where
 
 import Cardano.Crypto.Hash.Class (hashToStringAsHex)
-import Cardano.Ledger.Binary.Plain (serialize)
 import Cardano.Ledger.Crypto
 import Cardano.Ledger.SafeHash (extractHash)
 import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
-import Cardano.Streamer.LedgerState (encodeNewEpochState, writeNewEpochState)
+import Cardano.Streamer.LedgerState (newEpochStateEpochNo, writeNewEpochState)
 import Cardano.Streamer.ProtocolInfo
 import Conduit
 import Control.Monad.Trans.Except
-import Data.ByteString.Lazy as BSL
 import Data.Foldable
 import Data.Monoid
 import Ouroboros.Consensus.Block
@@ -90,17 +88,35 @@ sourceBlocksWithState
   -> ExtLedgerState blk
   -> (ExtLedgerState blk -> b -> m (ExtLedgerState blk, c))
   -> ConduitT a c m (ExtLedgerState blk)
-sourceBlocksWithState blockComponent initState action = do
-  sourceBlocks blockComponent withOriginAnnTip .| go initState
+sourceBlocksWithState blockComponent initState action =
+  fmap fst $
+    sourceBlocksWithState' blockComponent initState () $
+      \s a b -> (\(s', c) -> (s', a, c)) <$> action s b
+
+sourceBlocksWithState'
+  :: ( MonadIO m
+     , MonadReader env m
+     , HasResourceRegistry env
+     , HasImmutableDb env blk
+     , HasHeader blk
+     , HasAnnTip blk
+     )
+  => BlockComponent blk b
+  -> ExtLedgerState blk
+  -> e
+  -> (ExtLedgerState blk -> e -> b -> m (ExtLedgerState blk, e, c))
+  -> ConduitT a c m (ExtLedgerState blk, e)
+sourceBlocksWithState' blockComponent initState acc0 action = do
+  sourceBlocks blockComponent withOriginAnnTip .| go initState acc0
   where
     withOriginAnnTip = headerStateTip (headerState initState)
-    go ledgerState =
+    go !ledgerState !acc =
       await >>= \case
-        Nothing -> pure ledgerState
+        Nothing -> pure (ledgerState, acc)
         Just b -> do
-          (ledgerState', c) <- lift $ action ledgerState b
+          (ledgerState', acc', c) <- lift $ action ledgerState acc b
           yield c
-          go ledgerState'
+          go ledgerState' acc'
 
 validateBlock
   :: LedgerSupportsProtocol blk
@@ -168,9 +184,16 @@ revalidatePrintBlock
       (ExtLedgerState (CardanoBlock StandardCrypto), BlockPrecis)
 revalidatePrintBlock !prevLedger !block = do
   let !blockPrecis = getBlockPrecis block
+      EpochNo epochNo = newEpochStateEpochNo prevLedger
   when (unSlotNo (bpSlotNo blockPrecis) `mod` 10 == 0) $
     logSticky $
-      "[" <> displayShow (bpEra blockPrecis) <> ": " <> displayShow (bpSlotNo blockPrecis) <> "]"
+      "["
+        <> displayShow (bpEra blockPrecis)
+        <> " <epoch "
+        <> displayShow epochNo
+        <> ">: "
+        <> displayShow (bpSlotNo blockPrecis)
+        <> "]"
   ledgerCfg <- ExtLedgerCfg . pInfoConfig . dsAppProtocolInfo <$> ask
   let !result = lrResult $ tickThenReapplyLedgerResult ledgerCfg block prevLedger
   pure (result, blockPrecis)

@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
@@ -5,23 +6,30 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Cardano.Streamer.BlockInfo where
 
 import qualified Cardano.Chain.Block as B
 import qualified Cardano.Chain.UTxO as B
 import qualified Cardano.Chain.Update as B
+import Cardano.Ledger.Address
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary
 import Cardano.Ledger.Block
+import Cardano.Ledger.Coin
 import Cardano.Ledger.Core
+import Cardano.Ledger.Credential
 import Cardano.Ledger.Crypto
+import Cardano.Ledger.Keys
 import Cardano.Ledger.SafeHash
+import Cardano.Ledger.Val
 import Cardano.Protocol.TPraos.BHeader
 import Cardano.Streamer.Common
 import Control.Monad.Trans.Fail.String (errorFail)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
+import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 
 -- import Ouroboros.Consensus.Block
@@ -91,13 +99,13 @@ instance HashAnnotated (RawBlock c) EraIndependentBlockBody c
 applyBlock
   :: (ByronBlock -> a)
   -> ( forall era
-        . (EraSegWits era)
+        . (EraSegWits era, EraCrypto era ~ StandardCrypto)
        => BlockEra
        -> ShelleyBlock (TPraos (EraCrypto era)) era
        -> a
      )
   -> ( forall era
-        . (EraSegWits era)
+        . (EraSegWits era, EraCrypto era ~ StandardCrypto)
        => BlockEra
        -> ShelleyBlock (Praos (EraCrypto era)) era
        -> a
@@ -244,8 +252,13 @@ getTxPrecis tx =
     }
 
 applyBlockTxs
-  :: ([B.ATxAux ByteString] -> a)
-  -> (forall era. EraSegWits era => [Tx era] -> a)
+  :: forall a
+   . ([B.ATxAux ByteString] -> a)
+  -> ( forall era
+        . (EraSegWits era, EraCrypto era ~ StandardCrypto)
+       => [Tx era]
+       -> a
+     )
   -> CardanoBlock StandardCrypto
   -> a
 applyBlockTxs applyByronTxs applyNonByronTxs =
@@ -257,6 +270,12 @@ applyBlockTxs applyByronTxs applyNonByronTxs =
           let B.ATxPayload atxs = B.bodyTxPayload (B.blockBody abBlock)
            in applyByronTxs atxs
         B.ABOBBoundary _abBlock -> applyByronTxs []
+    applyNonByronBlock
+      :: forall era p
+       . (EraSegWits era, EraCrypto era ~ StandardCrypto)
+      => BlockEra
+      -> ShelleyBlock (p (EraCrypto era)) era
+      -> a
     applyNonByronBlock _ = applyNonByronTxs . toList . fromTxSeq . bbody . shelleyBlockRaw
 
 getSlotNo :: CardanoBlock StandardCrypto -> SlotNo
@@ -283,3 +302,18 @@ getPraosBHeaderBody block = headerBody (bheader (shelleyBlockRaw block))
 
 writeTx :: forall era m. (EraTx era, MonadIO m) => FilePath -> Tx era -> m ()
 writeTx fp = liftIO . BSL.writeFile fp . serialize (eraProtVerLow @era)
+
+filterBlockWithdrawals
+  :: Set (Credential 'Staking StandardCrypto)
+  -> CardanoBlock StandardCrypto
+  -> Map (Credential 'Staking StandardCrypto) Coin
+filterBlockWithdrawals creds =
+  applyBlockTxs (const mempty) $ \txs ->
+    Map.unionsWith (<+>) $
+      ( map
+          ( \tx ->
+              let wdrls = Map.mapKeys getRwdCred $ unWithdrawals (tx ^. bodyTxL . withdrawalsTxBodyL)
+               in wdrls `Map.restrictKeys` creds
+          )
+          txs
+      )

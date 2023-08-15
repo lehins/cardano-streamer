@@ -4,16 +4,23 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Cardano.Streamer.LedgerState (
   encodeNewEpochState,
   applyNonByronNewEpochState,
   applyNewEpochState,
-  lookupReward,
+  lookupRewards,
+  lookupTotalRewards,
   writeNewEpochState,
+  newEpochStateEpochNo,
+  detectNewRewards,
 ) where
 
-import Cardano.Chain.Block (ChainValidationState)
+import Cardano.Chain.Block as Byron (ChainValidationState (cvsUpdateState))
+import qualified Cardano.Chain.Slotting as Byron (EpochNumber (getEpochNumber))
+import qualified Cardano.Chain.Update.Validation.Interface as Byron (State (currentEpoch))
+import Cardano.Ledger.BaseTypes (EpochNo (..))
 import Cardano.Ledger.Binary.Plain as Plain (Encoding, ToCBOR, serialize, toCBOR)
 import Cardano.Ledger.CertState
 import Cardano.Ledger.Coin
@@ -24,7 +31,9 @@ import Cardano.Ledger.Keys
 import Cardano.Ledger.Shelley.Governance (EraGovernance)
 import Cardano.Ledger.Shelley.LedgerState
 import Cardano.Ledger.UMap as UM
+import Cardano.Ledger.Val
 import qualified Data.ByteString.Lazy as BSL
+import qualified Data.Map.Merge.Strict as Map
 import Ouroboros.Consensus.Byron.Ledger.Ledger
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Ledger.Extended
@@ -41,7 +50,7 @@ writeNewEpochState fp = liftIO . BSL.writeFile fp . Plain.serialize . encodeNewE
 applyNewEpochState
   :: Crypto c
   => (ChainValidationState -> a)
-  -> (forall era. ToCBOR (NewEpochState era)  => NewEpochState era -> a)
+  -> (forall era. ToCBOR (NewEpochState era) => NewEpochState era -> a)
   -> ExtLedgerState (CardanoBlock c)
   -> a
 applyNewEpochState fByronBased fShelleyBased extLedgerState =
@@ -56,7 +65,7 @@ applyNewEpochState fByronBased fShelleyBased extLedgerState =
 
 applyNonByronNewEpochState
   :: Crypto c
-  => (forall era. (EraTxOut era, EraGovernance era) => NewEpochState era -> a)
+  => (forall era. (EraCrypto era ~ c, EraTxOut era, EraGovernance era) => NewEpochState era -> a)
   -> ExtLedgerState (CardanoBlock c)
   -> Maybe a
 applyNonByronNewEpochState f extLedgerState =
@@ -77,10 +86,58 @@ lookupStakeCredentials creds nes =
   let um = dsUnified (certDState (lsCertState (esLState (nesEs nes))))
    in UM.domRestrictedStakeCredentials creds um
 
-lookupReward :: Set (Credential 'Staking (EraCrypto era)) -> NewEpochState era -> Maybe Coin
-lookupReward creds nes = guard (Map.null rewards) >> pure (fold rewards)
+lookupRewards
+  :: Set (Credential 'Staking (EraCrypto era))
+  -> NewEpochState era
+  -> Map (Credential 'Staking (EraCrypto era)) Coin
+lookupRewards creds nes = scRewards $ lookupStakeCredentials creds nes
+
+lookupTotalRewards :: Set (Credential 'Staking (EraCrypto era)) -> NewEpochState era -> Maybe Coin
+lookupTotalRewards creds nes = guard (Map.null credsRewards) >> pure (fold credsRewards)
   where
-    rewards = scRewards $ lookupStakeCredentials creds nes
+    credsRewards = lookupRewards creds nes
 
 -- lookupReward :: Set (Credential 'Staking (EraCrypto era)) -> NewEpochState era -> Maybe Coin
 -- lookupReward = undefined
+
+newEpochStateEpochNo :: Crypto c => ExtLedgerState (CardanoBlock c) -> EpochNo
+newEpochStateEpochNo =
+  applyNewEpochState
+    (EpochNo . Byron.getEpochNumber . Byron.currentEpoch . Byron.cvsUpdateState)
+    nesEL
+
+detectNewRewards
+  :: Crypto c
+  => EpochNo
+  -> Set (Credential 'Staking c)
+  -> Map (Credential 'Staking c) Coin
+  -> Map (Credential 'Staking c) Coin
+  -> ExtLedgerState (CardanoBlock c)
+  -> Maybe (EpochNo, Map (Credential 'Staking c) Coin, Map (Credential 'Staking c) Coin)
+detectNewRewards prevEpochNo creds prevRewards epochWithdrawals extLedgerState = do
+  let curEpochNo = newEpochStateEpochNo extLedgerState
+  unless (curEpochNo == prevEpochNo || curEpochNo == prevEpochNo + 1) $
+    error $
+      "Current epoch number: "
+        ++ show curEpochNo
+        ++ " is too far apart from the previous one: "
+        ++ show prevEpochNo
+  -- rewards are payed out on the epoch boundary
+  guard (curEpochNo == prevEpochNo + 1)
+  curRewards <- applyNonByronNewEpochState (lookupRewards creds) extLedgerState
+  let epochReceivedRewards =
+        Map.merge
+          Map.dropMissing -- credential was unregistered
+          (Map.filterMissing $ \_ c -> c /= mempty) -- credential was registered. Discard zero rewards
+          ( Map.zipWithMaybeMatched $ \cred cp cc -> do
+              -- Need to adjust for withdrawals
+              let cpw = maybe cp (cp <->) $ Map.lookup cred epochWithdrawals
+              guard (cpw /= cc) -- no change, means no new rewards
+              when (cc < cpw) $ error "New reward amounts can't be smaller than the previous ones"
+              let newRewardAmount = cc <-> cpw
+              guard (newRewardAmount /= mempty) -- Discard zero change to rewards
+              Just newRewardAmount -- new reward amount
+          )
+          prevRewards
+          curRewards
+  pure (curEpochNo, curRewards, epochReceivedRewards)
