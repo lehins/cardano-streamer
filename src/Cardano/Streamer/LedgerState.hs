@@ -97,8 +97,6 @@ lookupTotalRewards creds nes = guard (Map.null credsRewards) >> pure (fold creds
   where
     credsRewards = lookupRewards creds nes
 
--- lookupReward :: Set (Credential 'Staking (EraCrypto era)) -> NewEpochState era -> Maybe Coin
--- lookupReward = undefined
 
 newEpochStateEpochNo :: Crypto c => ExtLedgerState (CardanoBlock c) -> EpochNo
 newEpochStateEpochNo =
@@ -108,13 +106,13 @@ newEpochStateEpochNo =
 
 detectNewRewards
   :: Crypto c
-  => EpochNo
-  -> Set (Credential 'Staking c)
+  => Set (Credential 'Staking c)
+  -> EpochNo
   -> Map (Credential 'Staking c) Coin
   -> Map (Credential 'Staking c) Coin
   -> ExtLedgerState (CardanoBlock c)
   -> Maybe (EpochNo, Map (Credential 'Staking c) Coin, Map (Credential 'Staking c) Coin)
-detectNewRewards prevEpochNo creds prevRewards epochWithdrawals extLedgerState = do
+detectNewRewards creds prevEpochNo prevRewards epochWithdrawals extLedgerState = do
   let curEpochNo = newEpochStateEpochNo extLedgerState
   unless (curEpochNo == prevEpochNo || curEpochNo == prevEpochNo + 1) $
     error $

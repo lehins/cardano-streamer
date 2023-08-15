@@ -45,7 +45,7 @@ import Ouroboros.Consensus.Shelley.Ledger.Block hiding (Header)
 import Ouroboros.Consensus.Shelley.Protocol.Praos ()
 import Ouroboros.Consensus.Shelley.Protocol.TPraos ()
 
-data BlockEra
+data CardanoEra
   = Byron
   | Shelley
   | Allegra
@@ -55,7 +55,7 @@ data BlockEra
   | Conway
   deriving (Eq, Show)
 
-instance Display BlockEra where
+instance Display CardanoEra where
   display = displayShow
 
 data TxPrecis = TxPrecis
@@ -65,7 +65,7 @@ data TxPrecis = TxPrecis
   }
 
 data BlockPrecis = BlockPrecis
-  { bpEra :: !BlockEra
+  { bpEra :: !CardanoEra
   , --
     -- In Byron a boundary block changes this value, otherwise it will be inferred from the
     -- ledger state
@@ -96,21 +96,26 @@ instance SafeToHash (RawBlock c) where
 
 instance HashAnnotated (RawBlock c) EraIndependentBlockBody c
 
+getCardanoEra :: Crypto c => CardanoBlock c -> CardanoEra
+getCardanoEra =
+  applyBlock (\_ -> Byron) (\era _ -> era) (\era _ -> era)
+
 applyBlock
-  :: (ByronBlock -> a)
+  :: Crypto c
+  => (ByronBlock -> a)
   -> ( forall era
-        . (EraSegWits era, EraCrypto era ~ StandardCrypto)
-       => BlockEra
+        . (EraSegWits era, EraCrypto era ~ c)
+       => CardanoEra
        -> ShelleyBlock (TPraos (EraCrypto era)) era
        -> a
      )
   -> ( forall era
-        . (EraSegWits era, EraCrypto era ~ StandardCrypto)
-       => BlockEra
+        . (EraSegWits era, EraCrypto era ~ c)
+       => CardanoEra
        -> ShelleyBlock (Praos (EraCrypto era)) era
        -> a
      )
-  -> CardanoBlock StandardCrypto
+  -> CardanoBlock c
   -> a
 applyBlock applyBronBlock applyTPraosBlock applyPraosBlock = \case
   BlockByron byronBlock -> applyBronBlock byronBlock
@@ -121,7 +126,7 @@ applyBlock applyBronBlock applyTPraosBlock applyPraosBlock = \case
   BlockBabbage babbageBlock -> applyPraosBlock Babbage babbageBlock
   BlockConway conwayBlock -> applyPraosBlock Conway conwayBlock
 
-getRawBlock :: CardanoBlock StandardCrypto -> RawBlock StandardCrypto
+getRawBlock :: Crypto c => CardanoBlock c -> RawBlock c
 getRawBlock =
   mkRawBlock . applyBlock byronBlockBytes blockBytes blockBytes
   where
@@ -141,7 +146,7 @@ getRawBlock =
           safeHash = hashAnnotated rb
        in rb{rawBlockHash = safeHash}
 
-getBlockPrecis :: CardanoBlock StandardCrypto -> BlockPrecis
+getBlockPrecis :: Crypto c => CardanoBlock c -> BlockPrecis
 getBlockPrecis =
   applyBlock getByronBlockPrecis getTPraosBlockPrecis getPraosBlockPrecis
   where
@@ -191,7 +196,7 @@ getBlockPrecis =
 
 getTPraosBlockPrecis
   :: (EraSegWits era, Crypto c)
-  => BlockEra
+  => CardanoEra
   -> ShelleyBlock (TPraos c) era
   -> BlockPrecis
 getTPraosBlockPrecis era block =
@@ -216,7 +221,7 @@ getTPraosBlockPrecis era block =
 
 getPraosBlockPrecis
   :: (EraSegWits era, Crypto c)
-  => BlockEra
+  => CardanoEra
   -> ShelleyBlock (Praos c) era
   -> BlockPrecis
 getPraosBlockPrecis era block =
@@ -252,14 +257,15 @@ getTxPrecis tx =
     }
 
 applyBlockTxs
-  :: forall a
-   . ([B.ATxAux ByteString] -> a)
+  :: forall a c
+   . Crypto c
+  => ([B.ATxAux ByteString] -> a)
   -> ( forall era
-        . (EraSegWits era, EraCrypto era ~ StandardCrypto)
+        . (EraSegWits era, EraCrypto era ~ c)
        => [Tx era]
        -> a
      )
-  -> CardanoBlock StandardCrypto
+  -> CardanoBlock c
   -> a
 applyBlockTxs applyByronTxs applyNonByronTxs =
   applyBlock applyByronBlock applyNonByronBlock applyNonByronBlock
@@ -272,20 +278,20 @@ applyBlockTxs applyByronTxs applyNonByronTxs =
         B.ABOBBoundary _abBlock -> applyByronTxs []
     applyNonByronBlock
       :: forall era p
-       . (EraSegWits era, EraCrypto era ~ StandardCrypto)
-      => BlockEra
+       . (EraSegWits era, EraCrypto era ~ c)
+      => CardanoEra
       -> ShelleyBlock (p (EraCrypto era)) era
       -> a
     applyNonByronBlock _ = applyNonByronTxs . toList . fromTxSeq . bbody . shelleyBlockRaw
 
-getSlotNo :: CardanoBlock StandardCrypto -> SlotNo
+getSlotNo :: Crypto c => CardanoBlock c -> SlotNo
 getSlotNo =
   applyBlock
     byronBlockSlotNo
     (\_ -> bheaderSlotNo . getTPraosBHeaderBody)
     (\_ -> hbSlotNo . getPraosBHeaderBody)
 
-getSlotNoWithEra :: CardanoBlock StandardCrypto -> (BlockEra, SlotNo)
+getSlotNoWithEra :: Crypto c => CardanoBlock c -> (CardanoEra, SlotNo)
 getSlotNoWithEra =
   applyBlock
     ((,) Byron . byronBlockSlotNo)
@@ -304,9 +310,10 @@ writeTx :: forall era m. (EraTx era, MonadIO m) => FilePath -> Tx era -> m ()
 writeTx fp = liftIO . BSL.writeFile fp . serialize (eraProtVerLow @era)
 
 filterBlockWithdrawals
-  :: Set (Credential 'Staking StandardCrypto)
-  -> CardanoBlock StandardCrypto
-  -> Map (Credential 'Staking StandardCrypto) Coin
+  :: Crypto c
+  => Set (Credential 'Staking c)
+  -> CardanoBlock c
+  -> Map (Credential 'Staking c) Coin
 filterBlockWithdrawals creds =
   applyBlockTxs (const mempty) $ \txs ->
     Map.unionsWith (<+>) $

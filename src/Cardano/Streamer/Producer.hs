@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Cardano.Streamer.Producer where
 
@@ -30,7 +31,6 @@ import Ouroboros.Consensus.Ledger.SupportsProtocol (LedgerSupportsProtocol)
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
-import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
 import Ouroboros.Consensus.Util.ResourceRegistry
 import RIO.FilePath
 
@@ -198,6 +198,57 @@ revalidatePrintBlock !prevLedger !block = do
   let !result = lrResult $ tickThenReapplyLedgerResult ledgerCfg block prevLedger
   pure (result, blockPrecis)
 
+-- advanceBlock
+--   :: ( ExtLedgerState (CardanoBlock StandardCrypto)
+--        -> SlotNo
+--        -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) a
+--      )
+--   -> ( ExtLedgerState (CardanoBlock StandardCrypto)
+--        -> CardanoBlock StandardCrypto
+--        -> a
+--        -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) b
+--      )
+--   -> ExtLedgerState (CardanoBlock StandardCrypto)
+--   -> CardanoBlock StandardCrypto
+--   -> RIO
+--       (DbStreamerApp (CardanoBlock StandardCrypto))
+--       (ExtLedgerState (CardanoBlock StandardCrypto), a, b)
+-- advanceBlock inspectTickState inspectBlockState !prevLedger !block = do
+--   let (era, slotNo) = getSlotNoWithEra block
+--   when (unSlotNo slotNo `mod` 10 == 0) $
+--     logSticky $
+--       "["
+--         <> displayShow era
+--         <> ": "
+--         <> displayShow slotNo
+--         <> "]"
+--   ledgerCfg <- ExtLedgerCfg . pInfoConfig . dsAppProtocolInfo <$> ask
+--   let lrTick  = applyChainTickLedgerResult ledgerCfg slotNo prevLedger
+--   a <- inspectTickState (lrResult lrTick) slotNo
+--   case validationM
+--       lrBlock = reapplyBlockLedgerResult   cfg            blk (lrResult lrTick)
+--   in LedgerResult {
+--       lrEvents = lrEvents lrTick <> lrEvents lrBlock
+--     , lrResult = lrResult lrBlock
+--     }
+--   let !result = lrResult $ tickThenReapplyLedgerResult ledgerCfg block prevLedger
+--   pure (result, blockPrecis)
+
+-- data RewardsState = RewardsState
+--   { curEpoch :: !EpochNo
+--   , curEpochRewards :: !(Map (Credential 'Staking c) Coin)
+--   , curEpochWithdrawals :: !(Map (Credential 'Staking c) Coin)
+--   , rewardsPerEpoch :: !(Map EpochNo (Map (Credential 'Staking c) Coin))
+--   , withdrawalsPerEpoch :: !(Map EpochNo (Map (Credential 'Staking c) Coin))
+--   }
+
+-- accumNewRewards creds rs prevExtLedgerState block = do
+--   (newExtLedgerState, _) <- revalidatePrintBlock prevExtLedgerState block
+--   let newEpochWithdrawals = filterBlockWithdrawals creds block
+--         Map.unionWith (<>) () (curEpochWithdrawals rs)
+--   case detectNewRewards creds (curEpoch rs) (curEpochRewards rs) (curEpochWithdrawals rs) newExtLedgerState of
+--     Nothing -> (prevEpochNo, newExtLedgerState, rewards)
+
 countTxOuts
   :: ExtLedgerState (CardanoBlock StandardCrypto)
   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) Int
@@ -224,34 +275,31 @@ revalidateWriteNewEpochState initLedgerState = do
             filePath = dir </> "new-epoch-state_" ++ show slotNo ++ ".cbor"
         writeNewEpochState filePath extLedgerState
 
-runApp
-  :: FilePath
-  -- ^ Db directory
-  -> FilePath
-  -- ^ Config file path
-  -> Maybe FilePath
-  -- ^ Directory where requested files should be written to.
-  -> Maybe DiskSnapshot
-  -- ^ Where to start from
-  -> Bool
-  -- ^ Verbose logging?
-  -> IO ()
-runApp dbDir confFilePath mOutDir diskSnapshot verbose = do
-  logOpts <- logOptionsHandle stdout verbose
-  withLogFunc (setLogUseLoc False logOpts) $ \logFunc -> do
+-- runApp
+--   :: FilePath
+--   -> FilePath
+--   -> Maybe FilePath
+--   -> Maybe DiskSnapshot
+--   -> Bool
+--   -> IO ()
+-- runApp dbDir confFilePath mOutDir diskSnapshot verbose = do
+runApp :: Opts -> IO ()
+runApp Opts {..} = do
+  logOpts <- logOptionsHandle stdout oVerbose
+  withLogFunc (setLogMinLevel oLogLevel $ setLogUseLoc oDebug logOpts) $ \logFunc -> do
     withRegistry $ \registry -> do
       let appConf =
             AppConfig
-              { appConfDbDir = dbDir
-              , appConfFilePath = confFilePath
-              , appConfDiskSnapshot = diskSnapshot
+              { appConfDbDir = oChainDir
+              , appConfFilePath = oConfigFilePath
+              , appConfDiskSnapshot = oDiskSnapShot
+              , appConfValidationMode = oValidationMode
               , appConfLogFunc = logFunc
               , appConfRegistry = registry
               }
       void $ runRIO appConf $ runDbStreamerApp $ \initLedger -> do
         app <- ask
-        -- -- Validate:
-        runRIO (app{dsAppOutDir = mOutDir}) $ validatePrintLedger initLedger
+        runRIO (app{dsAppOutDir = oOutDir}) $ validatePrintLedger initLedger
 
 -- -- TxOuts:
 -- total <- runRIO (app{dsAppOutDir = mOutDir}) $ countTxOuts initLedger

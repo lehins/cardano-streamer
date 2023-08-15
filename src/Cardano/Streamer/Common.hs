@@ -6,10 +6,12 @@
 module Cardano.Streamer.Common (
   DbStreamerApp (..),
   AppConfig (..),
+  Opts (..),
   throwExceptT,
   throwShowExceptT,
   throwStringExceptT,
   mkTracer,
+  ValidationMode (..),
   HasImmutableDb (..),
   HasResourceRegistry (..),
   RIO,
@@ -64,6 +66,12 @@ throwStringExceptT m =
 throwShowExceptT :: (HasCallStack, Show e, MonadIO m) => ExceptT e m a -> m a
 throwShowExceptT m = throwStringExceptT $ withExceptT show m
 
+data ValidationMode
+  = FullValidation
+  | ReValidation
+  | NoValidation
+  deriving (Eq, Ord, Enum, Bounded, Show)
+
 data DbStreamerApp blk = DbStreamerApp
   { dsAppLogFunc :: !LogFunc
   , dsAppRegistry :: !(ResourceRegistry IO)
@@ -72,6 +80,7 @@ data DbStreamerApp blk = DbStreamerApp
   , dsAppIDb :: !(ImmutableDB.ImmutableDB IO blk)
   , dsAppOutDir :: !(Maybe FilePath)
   -- ^ Output directory where to write files
+  , dsValidationMode :: !ValidationMode
   }
 
 class HasImmutableDb env blk | env -> blk where
@@ -92,6 +101,7 @@ data AppConfig = AppConfig
   , appConfFilePath :: !FilePath
   -- ^ Config file path
   , appConfDiskSnapshot :: !(Maybe DiskSnapshot)
+  , appConfValidationMode :: !ValidationMode
   , appConfLogFunc :: !LogFunc
   , appConfRegistry :: !(ResourceRegistry IO)
   }
@@ -101,3 +111,23 @@ instance HasLogFunc AppConfig where
 
 instance HasResourceRegistry AppConfig where
   registryL = lens appConfRegistry $ \app registry -> app{appConfRegistry = registry}
+
+data Opts = Opts
+  { oChainDir :: FilePath
+  -- ^ Db directory
+  , oConfigFilePath :: FilePath
+  -- ^ Config file path
+  , oOutDir :: Maybe FilePath
+  -- ^ Directory where requested files should be written to.
+  , oDiskSnapShot :: Maybe DiskSnapshot
+  -- ^ Where to start from
+  , oValidationMode :: ValidationMode
+  -- ^ What is the level of ledger validation
+  , oLogLevel :: LogLevel
+  -- ^ Minimum log level
+  , oVerbose :: Bool
+  -- ^ Verbose logging?
+  , oDebug :: Bool
+  -- ^ Debug logging?
+  }
+  deriving (Show)

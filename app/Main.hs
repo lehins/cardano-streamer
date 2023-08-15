@@ -1,15 +1,12 @@
-{-# LANGUAGE RecordWildCards #-}
-
 module Main where
 
 import Cardano.Streamer.Producer
---import Ouroboros.Consensus.Storage.LedgerDB.Snapshots
 import CLI
 
 main :: IO ()
 main = do
-  Args Opts{..} <- parseArgs
-  runApp oChainDir oConfigFilePath oOutDir oDiskSnapShot oVerbose -- oLogLevel
+  Args opts <- parseArgs
+  runApp opts
     -- "/home/lehins/.local/share/Daedalus/mainnet/chain"
     -- "/home/lehins/iohk/cardano-node/configuration/cardano/mainnet-config.json"
     -- (Just ".")
