@@ -24,9 +24,14 @@ import Ouroboros.Consensus.HeaderValidation (
   annTipPoint,
   headerStateTip,
  )
-import Ouroboros.Consensus.Ledger.Abstract (tickThenApplyLedgerResult, tickThenReapplyLedgerResult)
-import Ouroboros.Consensus.Ledger.Basics (LedgerResult (lrResult))
-import Ouroboros.Consensus.Ledger.Extended (ExtLedgerCfg (..), ExtLedgerState (headerState))
+import Ouroboros.Consensus.Ledger.Abstract (
+  applyBlockLedgerResult,
+  reapplyBlockLedgerResult,
+  tickThenApplyLedgerResult,
+  tickThenReapplyLedgerResult,
+ )
+import Ouroboros.Consensus.Ledger.Basics (LedgerResult (lrResult), applyChainTickLedgerResult)
+import Ouroboros.Consensus.Ledger.Extended (ExtLedgerCfg (..), ExtLedgerState (headerState), Ticked)
 import Ouroboros.Consensus.Ledger.SupportsProtocol (LedgerSupportsProtocol)
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import Ouroboros.Consensus.Storage.ChainDB as ChainDB
@@ -198,41 +203,61 @@ revalidatePrintBlock !prevLedger !block = do
   let !result = lrResult $ tickThenReapplyLedgerResult ledgerCfg block prevLedger
   pure (result, blockPrecis)
 
--- advanceBlock
---   :: ( ExtLedgerState (CardanoBlock StandardCrypto)
---        -> SlotNo
---        -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) a
---      )
---   -> ( ExtLedgerState (CardanoBlock StandardCrypto)
---        -> CardanoBlock StandardCrypto
---        -> a
---        -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) b
---      )
---   -> ExtLedgerState (CardanoBlock StandardCrypto)
---   -> CardanoBlock StandardCrypto
---   -> RIO
---       (DbStreamerApp (CardanoBlock StandardCrypto))
---       (ExtLedgerState (CardanoBlock StandardCrypto), a, b)
--- advanceBlock inspectTickState inspectBlockState !prevLedger !block = do
---   let (era, slotNo) = getSlotNoWithEra block
---   when (unSlotNo slotNo `mod` 10 == 0) $
---     logSticky $
---       "["
---         <> displayShow era
---         <> ": "
---         <> displayShow slotNo
---         <> "]"
---   ledgerCfg <- ExtLedgerCfg . pInfoConfig . dsAppProtocolInfo <$> ask
---   let lrTick  = applyChainTickLedgerResult ledgerCfg slotNo prevLedger
---   a <- inspectTickState (lrResult lrTick) slotNo
---   case validationM
---       lrBlock = reapplyBlockLedgerResult   cfg            blk (lrResult lrTick)
---   in LedgerResult {
---       lrEvents = lrEvents lrTick <> lrEvents lrBlock
---     , lrResult = lrResult lrBlock
---     }
---   let !result = lrResult $ tickThenReapplyLedgerResult ledgerCfg block prevLedger
---   pure (result, blockPrecis)
+advanceBlockGranular
+  :: ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto))
+       -> SlotNo
+       -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) a
+     )
+  -> ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto))
+       -> ExtLedgerState (CardanoBlock StandardCrypto)
+       -> CardanoBlock StandardCrypto
+       -> a
+       -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) b
+     )
+  -> ExtLedgerState (CardanoBlock StandardCrypto)
+  -> CardanoBlock StandardCrypto
+  -> RIO
+      (DbStreamerApp (CardanoBlock StandardCrypto))
+      (ExtLedgerState (CardanoBlock StandardCrypto), a, b)
+advanceBlockGranular inspectTickState inspectBlockState !prevLedger !block = do
+  let (era, slotNo) = getSlotNoWithEra block
+  when (unSlotNo slotNo `mod` 10 == 0) $
+    logSticky $
+      "["
+        <> displayShow era
+        <> ": "
+        <> displayShow slotNo
+        <> "]"
+  app <- ask
+  let ledgerCfg = ExtLedgerCfg . pInfoConfig $ dsAppProtocolInfo app
+      lrTick = applyChainTickLedgerResult ledgerCfg slotNo prevLedger
+  a <- inspectTickState (lrResult lrTick) slotNo
+  case dsValidationMode app of
+    FullValidation -> do undefined
+    ReValidation -> do
+      let lrBlock = reapplyBlockLedgerResult ledgerCfg block (lrResult lrTick)
+      b <- inspectBlockState (lrResult lrTick) (lrResult lrBlock) block a
+      pure (lrResult lrBlock, a, b)
+
+advanceBlock
+  :: ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto))
+       -> ExtLedgerState (CardanoBlock StandardCrypto)
+       -> CardanoBlock StandardCrypto
+       -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) a
+     )
+  -> ExtLedgerState (CardanoBlock StandardCrypto)
+  -> CardanoBlock StandardCrypto
+  -> RIO
+      (DbStreamerApp (CardanoBlock StandardCrypto))
+      (ExtLedgerState (CardanoBlock StandardCrypto), a)
+advanceBlock inspectBlockState !prevLedger !block = do
+  (ns, _, b) <-
+    advanceBlockGranular
+      (\_ _ -> pure ())
+      (\ts s blk _ -> inspectBlockState ts s blk)
+      prevLedger
+      block
+  pure (ns, b)
 
 -- data RewardsState = RewardsState
 --   { curEpoch :: !EpochNo
@@ -284,7 +309,7 @@ revalidateWriteNewEpochState initLedgerState = do
 --   -> IO ()
 -- runApp dbDir confFilePath mOutDir diskSnapshot verbose = do
 runApp :: Opts -> IO ()
-runApp Opts {..} = do
+runApp Opts{..} = do
   logOpts <- logOptionsHandle stdout oVerbose
   withLogFunc (setLogMinLevel oLogLevel $ setLogUseLoc oDebug logOpts) $ \logFunc -> do
     withRegistry $ \registry -> do

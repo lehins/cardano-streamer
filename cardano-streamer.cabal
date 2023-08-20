@@ -60,6 +60,7 @@ library
                      , transformers
                      , unliftio
                      , vector
+                     , sop-core
 
                      , cardano-ledger-binary
                      , cardano-ledger-babbage
