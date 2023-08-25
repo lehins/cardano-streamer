@@ -36,6 +36,7 @@ library
                      , async
                      , bytestring
                      , cardano-api
+                     , cardano-addresses
                      , cardano-binary
                      , cardano-crypto-class
                      , cardano-ledger-byron

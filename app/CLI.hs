@@ -4,6 +4,7 @@ module CLI where
 
 import Cardano.Streamer.Common
 import Control.Applicative
+import qualified Data.List.NonEmpty as NE
 import Options.Applicative
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots
 import RIO
@@ -100,6 +101,28 @@ optsParser =
       )
     <*> switch (long "verbose" <> short 'v' <> help "Enable verbose output")
     <*> switch (long "debug" <> short 'd' <> help "Enable debug output")
+    <*> commandParser
+
+commandParser =
+  subparser
+    ( metavar "replay"
+        <> command "replay" (info (pure Replay) (progDesc "Replay the chain"))
+    )
+    <|> subparser
+      ( metavar "rewards"
+          <> command
+            "rewards"
+            (info rewardsCommandParser (progDesc "Calculate Rewards and Wthdrawals per Epoch"))
+      )
+
+rewardsCommandParser =
+  ( ComputeRewards
+      <$> NE.some1
+        ( option
+            (readWithMaybe parseStakingCredential)
+            (long "address" <> help "Bech32 encoded Addres with 'addr' prefix")
+        )
+  )
 
 data Args = Args
   { argsOpts :: Opts
@@ -123,3 +146,6 @@ parseArgs =
             )
           <> fullDesc
       )
+
+readWithMaybe :: (Text -> Maybe a) -> ReadM a
+readWithMaybe f = maybeReader (f . T.pack)

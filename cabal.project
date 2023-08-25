@@ -27,6 +27,14 @@ package cardano-crypto-praos
 package HsOpenSSL
   flags: +use-pkg-config
 
+source-repository-package
+    type: git
+    location: https://github.com/input-output-hk/cardano-addresses
+    tag: 44d5a9eb3505b6bfbf281d40fa88531c3253b771
+    --sha256: 16rja48ryfjw3531kf15w0h3cdmscqgs8l1z1i2mvahq1vlhr2y6
+    subdir: command-line
+            core
+
 -- source-repository-package
 --   type: git
 --   location: https://github.com/input-output-hk/cardano-node

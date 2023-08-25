@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -14,7 +15,7 @@ module Cardano.Streamer.LedgerState (
   lookupRewards,
   lookupTotalRewards,
   writeNewEpochState,
-  newEpochStateEpochNo,
+  extLedgerStateEpochNo,
   detectNewRewards,
   pattern TickedLedgerStateAllegra,
   pattern TickedLedgerStateAlonzo,
@@ -232,7 +233,7 @@ applyTickedNonByronNewEpochState
   -> Ticked (ExtLedgerState (CardanoBlock c))
   -> Maybe a
 applyTickedNonByronNewEpochState f =
-  applyTickedNewEpochState (\ _ _ -> Nothing) (\ti -> Just . f ti)
+  applyTickedNewEpochState (\_ _ -> Nothing) (\ti -> Just . f ti)
 
 lookupStakeCredentials
   :: Set (Credential 'Staking (EraCrypto era))
@@ -253,44 +254,65 @@ lookupTotalRewards creds nes = guard (Map.null credsRewards) >> pure (fold creds
   where
     credsRewards = lookupRewards creds nes
 
-newEpochStateEpochNo :: Crypto c => ExtLedgerState (CardanoBlock c) -> EpochNo
-newEpochStateEpochNo =
+extLedgerStateEpochNo :: Crypto c => ExtLedgerState (CardanoBlock c) -> EpochNo
+extLedgerStateEpochNo =
   applyNewEpochState
     (EpochNo . Byron.getEpochNumber . Byron.currentEpoch . Byron.cvsUpdateState)
     nesEL
 
-detectNewRewards
+tickedExtLedgerStateEpochNo
   :: Crypto c
+  => Ticked (ExtLedgerState (CardanoBlock c))
+  -> (TransitionInfo, EpochNo)
+tickedExtLedgerStateEpochNo =
+  applyTickedNewEpochState
+    (\ti es -> (ti, EpochNo . Byron.getEpochNumber . Byron.currentEpoch $ Byron.cvsUpdateState es))
+    (\ti es -> (ti, nesEL es))
+
+detectNewRewards
+  :: (Crypto c, HasLogFunc env, MonadReader env m, MonadIO m)
   => Set (Credential 'Staking c)
   -> EpochNo
   -> Map (Credential 'Staking c) Coin
   -> Map (Credential 'Staking c) Coin
-  -> ExtLedgerState (CardanoBlock c)
-  -> Maybe (EpochNo, Map (Credential 'Staking c) Coin, Map (Credential 'Staking c) Coin)
+  -> Ticked (ExtLedgerState (CardanoBlock c))
+  -> m (EpochNo, Maybe (Map (Credential 'Staking c) Coin, Map (Credential 'Staking c) Coin))
 detectNewRewards creds prevEpochNo prevRewards epochWithdrawals extLedgerState = do
-  let curEpochNo = newEpochStateEpochNo extLedgerState
+  let (ti, curEpochNo) = tickedExtLedgerStateEpochNo extLedgerState
   unless (curEpochNo == prevEpochNo || curEpochNo == prevEpochNo + 1) $
-    error $
+    logWarn $
       "Current epoch number: "
-        ++ show curEpochNo
-        ++ " is too far apart from the previous one: "
-        ++ show prevEpochNo
-  -- rewards are payed out on the epoch boundary
-  guard (curEpochNo == prevEpochNo + 1)
-  curRewards <- applyNonByronNewEpochState (lookupRewards creds) extLedgerState
-  let epochReceivedRewards =
-        Map.merge
-          Map.dropMissing -- credential was unregistered
-          (Map.filterMissing $ \_ c -> c /= mempty) -- credential was registered. Discard zero rewards
-          ( Map.zipWithMaybeMatched $ \cred cp cc -> do
-              -- Need to adjust for withdrawals
-              let cpw = maybe cp (cp <->) $ Map.lookup cred epochWithdrawals
-              guard (cpw /= cc) -- no change, means no new rewards
-              when (cc < cpw) $ error "New reward amounts can't be smaller than the previous ones"
-              let newRewardAmount = cc <-> cpw
-              guard (newRewardAmount /= mempty) -- Discard zero change to rewards
-              Just newRewardAmount -- new reward amount
-          )
-          prevRewards
-          curRewards
-  pure (curEpochNo, curRewards, epochReceivedRewards)
+        <> displayShow curEpochNo
+        <> " is too far apart from the previous one: "
+        <> displayShow prevEpochNo
+  case ti of
+    TransitionUnknown _wo -> do
+      --logWarn $ "TransitionUnknown: " <> displayShow (curEpochNo, wo)
+      pure (curEpochNo, Nothing)
+    TransitionImpossible -> do
+      logWarn $ "TransitionImpossible: " <> displayShow curEpochNo
+      pure (curEpochNo, Nothing)
+    TransitionKnown en -> do
+      -- unless (en == curEpochNo) $ do
+      --   logWarn $ "Unexpected EpochNo mismatch: " <> displayShow (curEpochNo, en)
+      -- unless (curEpochNo == prevEpochNo + 1) $ do
+      --   logWarn $ "Unexpected EpochNo transition: " <> displayShow (curEpochNo, prevEpochNo + 1)
+      -- rewards are payed out on the epoch boundary
+      res <- forM (applyTickedNonByronNewEpochState (\_ -> lookupRewards creds) extLedgerState) $ \curRewards -> do
+        let epochReceivedRewards =
+              Map.merge
+                Map.dropMissing -- credential was unregistered
+                (Map.filterMissing $ \_ c -> c /= mempty) -- credential was registered. Discard zero rewards
+                ( Map.zipWithMaybeMatched $ \cred cp cc -> do
+                    -- Need to adjust for withdrawals
+                    let cpw = maybe cp (cp <->) $ Map.lookup cred epochWithdrawals
+                    guard (cpw /= cc) -- no change, means no new rewards
+                    when (cc < cpw) $ error "New reward amounts can't be smaller than the previous ones"
+                    let newRewardAmount = cc <-> cpw
+                    guard (newRewardAmount /= mempty) -- Discard zero change to rewards
+                    Just newRewardAmount -- new reward amount
+                )
+                prevRewards
+                curRewards
+        pure (curRewards, epochReceivedRewards)
+      pure (curEpochNo, res)

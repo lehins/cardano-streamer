@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE LambdaCase #-}
@@ -7,6 +8,7 @@ module Cardano.Streamer.Common (
   DbStreamerApp (..),
   AppConfig (..),
   Opts (..),
+  Command (..),
   throwExceptT,
   throwShowExceptT,
   throwStringExceptT,
@@ -14,11 +16,19 @@ module Cardano.Streamer.Common (
   ValidationMode (..),
   HasImmutableDb (..),
   HasResourceRegistry (..),
+  parseStakingCredential,
   RIO,
   runRIO,
   module X,
 ) where
 
+import qualified Cardano.Address as A
+import qualified Cardano.Address.Style.Shelley as A
+import Cardano.Crypto.Hash.Class (hashFromBytes)
+import Cardano.Ledger.Credential
+import Cardano.Ledger.Crypto
+import Cardano.Ledger.Hashes
+import Cardano.Ledger.Keys
 import Control.Monad.Trans.Except
 import Control.Tracer (Tracer (..))
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
@@ -112,6 +122,13 @@ instance HasLogFunc AppConfig where
 instance HasResourceRegistry AppConfig where
   registryL = lens appConfRegistry $ \app registry -> app{appConfRegistry = registry}
 
+data Command
+  = Replay
+  | ComputeRewards (NonEmpty (Credential 'Staking StandardCrypto))
+  deriving (Show)
+
+--    Set
+
 data Opts = Opts
   { oChainDir :: FilePath
   -- ^ Db directory
@@ -129,5 +146,25 @@ data Opts = Opts
   -- ^ Verbose logging?
   , oDebug :: Bool
   -- ^ Debug logging?
+  , oCommand :: Command
   }
   deriving (Show)
+
+parseStakingCredential :: MonadFail m => Text -> m (Credential 'Staking StandardCrypto)
+parseStakingCredential txt =
+  case A.fromBech32 txt of
+    Nothing -> fail "Can't parse as Bech32 Address"
+    Just addr ->
+      case A.eitherInspectAddress Nothing addr of
+        Left err -> fail $ show err
+        Right (A.InspectAddressByron{}) -> fail "Byron Address can't have Staking Crednetial"
+        Right (A.InspectAddressIcarus{}) -> fail "Icarus Address can't have Staking Crednetial"
+        Right (A.InspectAddressShelley ai) ->
+          maybe (fail $ "Address does not contain a Staking Credential: " ++ show txt) pure $
+            (KeyHashObj . KeyHash . partialHash <$> A.infoStakeKeyHash ai)
+              <|> (ScriptHashObj . ScriptHash . partialHash <$> A.infoStakeScriptHash ai)
+  where
+    partialHash bs =
+      case hashFromBytes bs of
+        Nothing -> error $ "Impossible: This should be a valid Hash value: " ++ show bs
+        Just h -> h
