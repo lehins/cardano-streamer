@@ -37,7 +37,7 @@ import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Crypto
 import Cardano.Ledger.Keys
-import Cardano.Ledger.Shelley.Governance (EraGovernance)
+import Cardano.Ledger.Shelley.Governance (EraGov)
 import Cardano.Ledger.Shelley.LedgerState hiding (LedgerState)
 import Cardano.Ledger.UMap as UM
 import Cardano.Ledger.Val
@@ -160,7 +160,7 @@ applyNewEpochState
   -> ( forall era
         . ( EraCrypto era ~ c
           , EraTxOut era
-          , EraGovernance era
+          , EraGov era
           , ToCBOR (NewEpochState era)
           )
        => NewEpochState era
@@ -183,7 +183,7 @@ applyNonByronNewEpochState
   => ( forall era
         . ( EraCrypto era ~ c
           , EraTxOut era
-          , EraGovernance era
+          , EraGov era
           , ToCBOR (NewEpochState era)
           )
        => NewEpochState era
@@ -199,7 +199,7 @@ applyTickedNewEpochState
   -> ( forall era
         . ( EraCrypto era ~ c
           , EraTxOut era
-          , EraGovernance era
+          , EraGov era
           , ToCBOR (NewEpochState era)
           )
        => TransitionInfo
@@ -223,7 +223,7 @@ applyTickedNonByronNewEpochState
   => ( forall era
         . ( EraCrypto era ~ c
           , EraTxOut era
-          , EraGovernance era
+          , EraGov era
           , ToCBOR (NewEpochState era)
           )
        => TransitionInfo

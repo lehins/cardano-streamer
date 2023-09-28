@@ -21,7 +21,7 @@ import Ouroboros.Consensus.Block.NestedContent (NestedCtxt)
 import Ouroboros.Consensus.Byron.Node
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Cardano.Node (
-  ProtocolTransitionParamsShelleyBased (..),
+  --ProtocolTransitionParamsShelleyBased (..),
   protocolInfoCardano,
  )
 import Ouroboros.Consensus.Config (configCodec, configSecurityParam, configStorage)

@@ -11,8 +11,8 @@ repository cardano-haskell-packages
     d4a35cd3121aa00d18544bb0ac01c3e1691d618f462c46129271bccf39f7e8ee
 
 index-state:
-  , hackage.haskell.org 2023-08-10T00:00:00Z
-  , cardano-haskell-packages 2023-08-10T22:37:03Z
+  , hackage.haskell.org 2023-09-27T00:00:00Z
+  , cardano-haskell-packages 2023-09-27T00:00:00Z
 
 packages: .
 
@@ -28,12 +28,30 @@ package HsOpenSSL
   flags: +use-pkg-config
 
 source-repository-package
-    type: git
-    location: https://github.com/input-output-hk/cardano-addresses
-    tag: 44d5a9eb3505b6bfbf281d40fa88531c3253b771
-    --sha256: 16rja48ryfjw3531kf15w0h3cdmscqgs8l1z1i2mvahq1vlhr2y6
-    subdir: command-line
-            core
+  type: git
+  location: git@github.com:input-output-hk/cardano-addresses.git
+  tag: 44d5a9eb3505b6bfbf281d40fa88531c3253b771
+  --sha256: 16rja48ryfjw3531kf15w0h3cdmscqgs8l1z1i2mvahq1vlhr2y6
+  subdir:
+    command-line
+    core
+
+source-repository-package
+  type: git
+  location: git@github.com:input-output-hk/cardano-api.git
+  tag: 43c2190dd1523fcfe39c5d8a45e8754ef80d28d9
+  subdir:
+    cardano-api
+
+source-repository-package
+  type: git
+  location: git@github.com:input-output-hk/ouroboros-consensus.git
+  tag: e3917f684e8b60e7bfc453d6d8114b800bdf167d
+  subdir:
+    ouroboros-consensus-cardano
+    ouroboros-consensus-diffusion
+    ouroboros-consensus-protocol
+    ouroboros-consensus
 
 -- source-repository-package
 --   type: git
