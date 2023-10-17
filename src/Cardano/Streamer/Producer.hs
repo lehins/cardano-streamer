@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -105,10 +106,10 @@ sourceBlocksWithState
   -> ConduitT a c m (ExtLedgerState blk)
 sourceBlocksWithState blockComponent initState action =
   fmap fst $
-    sourceBlocksWithState' blockComponent initState () $
+    sourceBlocksWithAccState blockComponent initState () $
       \s a b -> (\(s', c) -> (s', a, c)) <$> action s b
 
-sourceBlocksWithState'
+sourceBlocksWithAccState
   :: ( MonadIO m
      , MonadReader env m
      , HasResourceRegistry env
@@ -121,7 +122,7 @@ sourceBlocksWithState'
   -> e
   -> (ExtLedgerState blk -> e -> b -> m (ExtLedgerState blk, e, c))
   -> ConduitT a c m (ExtLedgerState blk, e)
-sourceBlocksWithState' blockComponent initState acc0 action = do
+sourceBlocksWithAccState blockComponent initState acc0 action = do
   sourceBlocks blockComponent withOriginAnnTip .| go initState acc0
   where
     withOriginAnnTip = headerStateTip (headerState initState)
@@ -221,7 +222,7 @@ advanceBlockGranular
   -> CardanoBlock StandardCrypto
   -> RIO
       (DbStreamerApp (CardanoBlock StandardCrypto))
-      (ExtLedgerState (CardanoBlock StandardCrypto), a, b)
+      (ExtLedgerState (CardanoBlock StandardCrypto), b)
 advanceBlockGranular inspectTickState inspectBlockState !prevLedger !block = do
   let (era, slotNo) = getSlotNoWithEra block
   when (unSlotNo slotNo `mod` 100 == 0) $ do
@@ -237,39 +238,56 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !block = do
   app <- ask
   let ledgerCfg = ExtLedgerCfg . pInfoConfig $ dsAppProtocolInfo app
       lrTick = applyChainTickLedgerResult ledgerCfg slotNo prevLedger
-  a <- inspectTickState (lrResult lrTick) slotNo
+      lrTickResult = lrResult lrTick
+  a <- inspectTickState lrTickResult slotNo
   case dsValidationMode app of
     FullValidation -> do
-      case runExcept (applyBlockLedgerResult ledgerCfg block (lrResult lrTick)) of
+      case runExcept (applyBlockLedgerResult ledgerCfg block lrTickResult) of
         Right lrBlock -> do
-          b <- inspectBlockState (lrResult lrTick) (lrResult lrBlock) a
-          pure (lrResult lrBlock, a, b)
-        Left err -> do
-          logSticky $
-            displayShow era <> ":[" <> displayShow slotNo <> "]"
-          let rawBlock = getRawBlock block
-              blockHashHex = hashToTextAsHex (extractHash (rawBlockHash rawBlock))
-          logError $
-            "Encountered an error while validating a block: " <> display blockHashHex
-          mOutDir <- dsAppOutDir <$> ask
-          forM_ mOutDir $ \outDir -> do
-            let prefix = outDir </> show (unSlotNo slotNo) <> "_" <> T.unpack blockHashHex
-                mkTxFileName ix = prefix <> "#" <> show ix <.> "cbor"
-                fileNameBlock = prefix <.> "cbor"
-            writeFileBinary fileNameBlock (rawBlockBytes rawBlock)
-            logInfo $ "Written block to: " <> display (T.pack fileNameBlock)
-            let epochFileName = outDir </> show (unSlotNo slotNo) <.> "cbor"
-            writeNewEpochState epochFileName prevLedger
-            logInfo $ "Written NewEpochState to: " <> display (T.pack epochFileName)
-            applyBlockTxs
-              (liftIO . print)
-              (zipWithM_ (\ix -> writeTx (mkTxFileName ix)) [0 :: Int ..])
-              block
-          throwString . show $ err
+          let lrBlockResult = lrResult lrBlock
+          b <- inspectBlockState lrTickResult lrBlockResult a
+          pure (lrBlockResult, b)
+        Left errorMessage -> reportValidationError errorMessage era slotNo block prevLedger
     ReValidation -> do
       let lrBlock = reapplyBlockLedgerResult ledgerCfg block (lrResult lrTick)
       b <- inspectBlockState (lrResult lrTick) (lrResult lrBlock) a
-      pure (lrResult lrBlock, a, b)
+      pure (lrResult lrBlock, b)
+
+reportValidationError
+  :: ( MonadReader (DbStreamerApp blk) m
+     , MonadIO m
+     , Show b
+     , Show a
+     , Crypto c
+     )
+  => a
+  -> b
+  -> SlotNo
+  -> CardanoBlock c
+  -> ExtLedgerState (CardanoBlock c)
+  -> m d
+reportValidationError errorMessage era slotNo block ledgerState = do
+  logSticky $
+    displayShow era <> ":[" <> displayShow slotNo <> "]"
+  let rawBlock = getRawBlock block
+      blockHashHex = hashToTextAsHex (extractHash (rawBlockHash rawBlock))
+  logError $
+    "Encountered an error while validating a block: " <> display blockHashHex
+  mOutDir <- dsAppOutDir <$> ask
+  forM_ mOutDir $ \outDir -> do
+    let prefix = outDir </> show (unSlotNo slotNo) <> "_" <> T.unpack blockHashHex
+        mkTxFileName ix = prefix <> "#" <> show ix <.> "cbor"
+        fileNameBlock = prefix <.> "cbor"
+    writeFileBinary fileNameBlock (rawBlockBytes rawBlock)
+    logInfo $ "Written block to: " <> display (T.pack fileNameBlock)
+    let epochFileName = outDir </> show (unSlotNo slotNo) <.> "cbor"
+    writeNewEpochState epochFileName ledgerState
+    logInfo $ "Written NewEpochState to: " <> display (T.pack epochFileName)
+    applyBlockTxs
+      (liftIO . print)
+      (zipWithM_ (\ix -> writeTx (mkTxFileName ix)) [0 :: Int ..])
+      block
+  throwString $ show errorMessage
 
 advanceBlock
   :: ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto))
@@ -281,14 +299,12 @@ advanceBlock
   -> RIO
       (DbStreamerApp (CardanoBlock StandardCrypto))
       (ExtLedgerState (CardanoBlock StandardCrypto), a)
-advanceBlock inspectBlockState !prevLedger !block = do
-  (ns, _, b) <-
-    advanceBlockGranular
-      (\_ _ -> pure ())
-      (\ts s _ -> inspectBlockState ts s)
-      prevLedger
-      block
-  pure (ns, b)
+advanceBlock inspectBlockState !prevLedger !block =
+  advanceBlockGranular
+    (\_ _ -> pure ())
+    (\ts s _ -> inspectBlockState ts s)
+    prevLedger
+    block
 
 advanceBlock_
   :: ExtLedgerState (CardanoBlock StandardCrypto)
@@ -296,10 +312,8 @@ advanceBlock_
   -> RIO
       (DbStreamerApp (CardanoBlock StandardCrypto))
       (ExtLedgerState (CardanoBlock StandardCrypto))
-advanceBlock_ !prevLedger !block = do
-  (ns, _, _) <-
-    advanceBlockGranular (\_ _ -> pure ()) (\_ _ _ -> pure ()) prevLedger block
-  pure ns
+advanceBlock_ !prevLedger !block =
+  fst <$> advanceBlockGranular (\_ _ -> pure ()) (\_ _ _ -> pure ()) prevLedger block
 
 data RewardsState c = RewardsState
   { curEpoch :: !EpochNo
@@ -424,7 +438,7 @@ computeRewards
 computeRewards creds initLedgerState = do
   -- (extLedgerState, rs) <-
   runConduit $
-    void (sourceBlocksWithState' GetBlock initLedgerState emptyRewardsState (accumNewRewards creds))
+    void (sourceBlocksWithAccState GetBlock initLedgerState emptyRewardsState (accumNewRewards creds))
       .| concatMapC id
       .| sinkList
   where

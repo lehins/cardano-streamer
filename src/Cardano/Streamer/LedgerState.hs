@@ -12,6 +12,7 @@ module Cardano.Streamer.LedgerState (
   encodeNewEpochState,
   applyNonByronNewEpochState,
   applyNewEpochState,
+  tickedExtLedgerStateEpochNo,
   lookupRewards,
   lookupTotalRewards,
   writeNewEpochState,
@@ -287,7 +288,7 @@ detectNewRewards creds prevEpochNo prevRewards epochWithdrawals extLedgerState =
         <> displayShow prevEpochNo
   case ti of
     TransitionUnknown _wo -> do
-      --logWarn $ "TransitionUnknown: " <> displayShow (curEpochNo, wo)
+      -- logWarn $ "TransitionUnknown: " <> displayShow (curEpochNo, wo)
       pure (curEpochNo, Nothing)
     TransitionImpossible -> do
       logWarn $ "TransitionImpossible: " <> displayShow curEpochNo
