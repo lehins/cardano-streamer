@@ -29,6 +29,7 @@ import Cardano.Ledger.Credential
 import Cardano.Ledger.Crypto
 import Cardano.Ledger.Hashes
 import Cardano.Ledger.Keys
+--import Cardano.Streamer.Benchmark (replayCalcStatsReport)
 import Control.Monad.Trans.Except
 import Control.Tracer (Tracer (..))
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
@@ -110,7 +111,9 @@ data AppConfig = AppConfig
   -- ^ Database directory
   , appConfFilePath :: !FilePath
   -- ^ Config file path
-  , appConfDiskSnapshot :: !(Maybe DiskSnapshot)
+  , appConfReadDiskSnapshot :: !(Maybe DiskSnapshot)
+  , appConfWriteDiskSnapshots :: ![DiskSnapshot]
+  , appConfStopSlotNumber :: !(Maybe Word64)
   , appConfValidationMode :: !ValidationMode
   , appConfLogFunc :: !LogFunc
   , appConfRegistry :: !(ResourceRegistry IO)
@@ -124,6 +127,7 @@ instance HasResourceRegistry AppConfig where
 
 data Command
   = Replay
+  | Benchmark
   | ComputeRewards (NonEmpty (Credential 'Staking StandardCrypto))
   deriving (Show)
 
@@ -136,8 +140,15 @@ data Opts = Opts
   -- ^ Config file path
   , oOutDir :: Maybe FilePath
   -- ^ Directory where requested files should be written to.
-  , oDiskSnapShot :: Maybe DiskSnapshot
+  , oSnapShotSuffix :: Maybe String
   -- ^ Where to start from
+  , oReadSnapShotSlotNumber :: Maybe Word64
+  -- ^ Slot number expected for the snapshot to read from.
+  , oWriteSnapShotSlotNumbers :: [Word64]
+  -- ^ Slot numbers for creating snapshots
+  , oStopSlotNumber :: Maybe Word64
+  -- ^ Stope replaying the chain once reaching this slot number. When no slot number is
+  -- supplied replay will stop only at the end of the immutable chain.
   , oValidationMode :: ValidationMode
   -- ^ What is the level of ledger validation
   , oLogLevel :: LogLevel

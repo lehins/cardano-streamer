@@ -50,7 +50,7 @@ import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Ledger.Extended
 import Ouroboros.Consensus.Protocol.Praos
 import Ouroboros.Consensus.Protocol.TPraos
-import Ouroboros.Consensus.Shelley.Ledger (shelleyLedgerState)
+--import Ouroboros.Consensus.Shelley.Ledger (shelleyLedgerState)
 import Ouroboros.Consensus.Shelley.Ledger.Block
 import Ouroboros.Consensus.Shelley.Ledger.Ledger
 import RIO
@@ -58,7 +58,7 @@ import qualified RIO.Map as Map
 
 import Data.SOP.BasicFunctors
 import Data.SOP.Telescope
-import Ouroboros.Consensus.Cardano.Block
+--import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.HardFork.Combinator.Ledger
 import Ouroboros.Consensus.HardFork.Combinator.State.Types as State
 
@@ -293,7 +293,7 @@ detectNewRewards creds prevEpochNo prevRewards epochWithdrawals extLedgerState =
     TransitionImpossible -> do
       logWarn $ "TransitionImpossible: " <> displayShow curEpochNo
       pure (curEpochNo, Nothing)
-    TransitionKnown en -> do
+    TransitionKnown _en -> do
       -- unless (en == curEpochNo) $ do
       --   logWarn $ "Unexpected EpochNo mismatch: " <> displayShow (curEpochNo, en)
       -- unless (curEpochNo == prevEpochNo + 1) $ do

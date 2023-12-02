@@ -189,7 +189,7 @@ runDbStreamerApp action = do
             , dsAppOutDir = Nothing
             , dsValidationMode = appConfValidationMode appConf
             }
-     in runRIO app (getInitLedgerState (appConfDiskSnapshot appConf) >>= action)
+     in runRIO app (getInitLedgerState (appConfReadDiskSnapshot appConf) >>= action)
 
 -----------
 

@@ -3,11 +3,8 @@
 module CLI where
 
 import Cardano.Streamer.Common
-import Control.Applicative
 import qualified Data.List.NonEmpty as NE
 import Options.Applicative
-import Ouroboros.Consensus.Storage.LedgerDB.Snapshots
-import RIO
 import RIO.Text as T
 
 readLogLevel :: ReadM LogLevel
@@ -27,33 +24,6 @@ readValidationMode =
     "none" -> Just NoValidation
     _ -> Nothing
 
-readDiskSnapshot :: Parser DiskSnapshot
-readDiskSnapshot =
-  DiskSnapshot
-    <$> option
-      auto
-      ( long "snapshot-slot"
-          <> short 's'
-          <> help
-            ( mconcat
-                [ "Read a Snapshot with this slot number. "
-                , "Results in failure a snapshot does not exist."
-                ]
-            )
-      )
-    <*> option
-      (Just <$> str)
-      ( long "snapshot-suffix"
-          <> value Nothing
-          <> help
-            ( mconcat
-                [ "Read a Snapshot with this suffix. By default no suffix is expected"
-                , "Eg. `--chain-db /path/chain -s 123456 --snapshot-suffix mysufix' will read a "
-                , " snapshot with this file path /path/chain/ledger/1234656_mysuffix"
-                ]
-            )
-      )
-
 optsParser :: Parser Opts
 optsParser =
   Opts
@@ -62,8 +32,8 @@ optsParser =
           <> metavar "CHAIN_DIR"
           <> help
             ( mconcat
-                [ "Path to the directory where Cardano Chain data is located. "
-                , "Eg. --db-dir=\"~/.local/share/Daedalus/mainnet/chain\""
+                [ "Path to the directory where Cardano Chain data is located, "
+                , "eg. --db-dir=\"~/.local/share/Daedalus/mainnet/chain\""
                 ]
             )
       )
@@ -84,7 +54,65 @@ optsParser =
           <> value Nothing
           <> help "Path to the directory where output files will be written to."
       )
-    <*> (fmap Just readDiskSnapshot <|> pure Nothing)
+    <*> ( option
+            (Just <$> str)
+            ( long "suffix"
+                <> value Nothing
+                <> help
+                  ( mconcat
+                      [ "Read and a write Snapshots with this suffix, "
+                      , "eg. `--chain-db /path/to/chain -r 123456 --suffix my_suffix' will read "
+                      , "a snapshot from a file with this file path: "
+                      , "/path/to/chain/ledger/1234656_my_suffix "
+                      , "By default no suffix is expected."
+                      ]
+                  )
+            )
+            <|> pure Nothing
+        )
+    <*> ( option
+            auto
+            ( long "read-snapshot"
+                <> short 'r'
+                <> help
+                  ( mconcat
+                      [ "Read a Snapshot with this slot number. "
+                      , "Also see a relevant --snapshot-suffix flag. "
+                      , "Results in failure if a snapshot does not exist."
+                      ]
+                  )
+            )
+            <|> pure Nothing
+        )
+    <*> many
+      ( option
+          auto
+          ( long "write-snapshot"
+              <> short 'w'
+              <> help
+                ( mconcat
+                    [ "Write a Snapshot with this slot number. "
+                    , "Snapshots for many slot numbers can be written in a single run. "
+                    , "Also see a relevant --snapshot-suffix flag. "
+                    -- , "Results in failure if a slot does not exist." -- does it?
+                    ]
+                )
+          )
+      )
+    <*> ( option
+            auto
+            ( long "stop"
+                <> short 's'
+                <> help
+                  ( mconcat
+                      [ "Stop replaying the chain at this slot number. "
+                      , "When no stopping slot number is provided, then the replay will "
+                      , "continue until the end of the immutable chain is reached."
+                      ]
+                  )
+            )
+            <|> pure Nothing
+        )
     <*> option
       readValidationMode
       ( long "validate"
@@ -103,11 +131,26 @@ optsParser =
     <*> switch (long "debug" <> short 'd' <> help "Enable debug output")
     <*> commandParser
 
+commandParser :: Parser Command
 commandParser =
   subparser
     ( metavar "replay"
         <> command "replay" (info (pure Replay) (progDesc "Replay the chain"))
     )
+    <|> subparser
+      ( metavar "benchmark"
+          <> command
+            "benchmark"
+            ( info
+                (pure Benchmark)
+                ( progDesc $
+                    mconcat
+                      [ "Replay the chanin with timing how long processing each step takes and "
+                      , "produce simple statistics at the end."
+                      ]
+                )
+            )
+      )
     <|> subparser
       ( metavar "rewards"
           <> command
@@ -115,6 +158,7 @@ commandParser =
             (info rewardsCommandParser (progDesc "Calculate Rewards and Wthdrawals per Epoch"))
       )
 
+rewardsCommandParser :: Parser Command
 rewardsCommandParser =
   ( ComputeRewards
       <$> NE.some1

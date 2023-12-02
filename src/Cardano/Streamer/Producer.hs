@@ -14,6 +14,7 @@ import Cardano.Ledger.Credential
 import Cardano.Ledger.Crypto
 import Cardano.Ledger.Keys
 import Cardano.Ledger.SafeHash (extractHash)
+import Cardano.Streamer.Benchmark
 import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
 import Cardano.Streamer.LedgerState (detectNewRewards, extLedgerStateEpochNo, writeNewEpochState)
@@ -45,6 +46,7 @@ import Ouroboros.Consensus.Ledger.SupportsProtocol (LedgerSupportsProtocol)
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
+import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
 import Ouroboros.Consensus.Util.ResourceRegistry
 import RIO.FilePath
 import qualified RIO.Set as Set
@@ -447,6 +449,23 @@ computeRewards creds initLedgerState = do
 
     emptyRewardsState = RewardsState 0 mempty mempty
 
+replayCalcStatsReport
+  :: ExtLedgerState (CardanoBlock StandardCrypto)
+  -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) StatsReport
+replayCalcStatsReport initLedgerState =
+  runConduit $ void (replayWithBenchmarking initLedgerState) .| calcStatsReport
+
+replayWithBenchmarking
+  :: ExtLedgerState (CardanoBlock StandardCrypto)
+  -> ConduitT
+      a
+      Stat
+      (RIO (DbStreamerApp (CardanoBlock StandardCrypto)))
+      (ExtLedgerState (CardanoBlock StandardCrypto))
+replayWithBenchmarking initLedgerState =
+  withBenchmarking $ \benchRunTick benchRunBlock ->
+    sourceBlocksWithState GetBlock initLedgerState (advanceBlockGranular benchRunTick benchRunBlock)
+
 runApp :: Opts -> IO ()
 runApp Opts{..} = do
   logOpts <- logOptionsHandle stdout oVerbose
@@ -456,7 +475,11 @@ runApp Opts{..} = do
             AppConfig
               { appConfDbDir = oChainDir
               , appConfFilePath = oConfigFilePath
-              , appConfDiskSnapshot = oDiskSnapShot
+              , appConfReadDiskSnapshot =
+                  DiskSnapshot <$> oReadSnapShotSlotNumber <*> pure oSnapShotSuffix
+              , appConfWriteDiskSnapshots =
+                  DiskSnapshot <$> oWriteSnapShotSlotNumbers <*> pure oSnapShotSuffix
+              , appConfStopSlotNumber = oStopSlotNumber
               , appConfValidationMode = oValidationMode
               , appConfLogFunc = logFunc
               , appConfRegistry = registry
@@ -466,6 +489,9 @@ runApp Opts{..} = do
         runRIO (app{dsAppOutDir = oOutDir}) $
           case oCommand of
             Replay -> void $ replayChain initLedger
+            Benchmark -> do
+              report <- replayCalcStatsReport initLedger
+              logInfo $ display report
             ComputeRewards creds ->
               void $ computeRewards (Set.fromList $ NE.toList creds) initLedger
 

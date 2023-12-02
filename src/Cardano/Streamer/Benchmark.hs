@@ -8,50 +8,18 @@
 
 module Cardano.Streamer.Benchmark where
 
-import Criterion.Measurement
-import Ouroboros.Consensus.HardFork.Combinator.State.Types
-import Cardano.Crypto.Hash.Class (hashToTextAsHex)
-import Cardano.Ledger.Coin
-import Cardano.Ledger.Credential
 import Cardano.Ledger.Crypto
-import Cardano.Ledger.Keys
-import Cardano.Ledger.SafeHash (extractHash)
-import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
-import Cardano.Streamer.LedgerState (tickedExtLedgerStateEpochNo,
-                                     detectNewRewards, extLedgerStateEpochNo, writeNewEpochState)
-import Cardano.Streamer.Producer
-import Cardano.Streamer.ProtocolInfo
+import Cardano.Streamer.LedgerState (tickedExtLedgerStateEpochNo)
+
+-- import Cardano.Streamer.Producer
 import Conduit
-import Control.Monad.Trans.Except
-import Data.Foldable
-import qualified Data.List.NonEmpty as NE
-import qualified Data.Map.Merge.Strict as Map
-import qualified Data.Map.Strict as Map
-import Data.Monoid
+import Criterion.Measurement (getCPUTime, getCycles, getTime, initializeTime)
 import Ouroboros.Consensus.Block
 import Ouroboros.Consensus.Cardano.Block
-import Ouroboros.Consensus.HeaderValidation (
-  AnnTip,
-  HasAnnTip (..),
-  annTipPoint,
-  headerStateTip,
- )
-import Ouroboros.Consensus.Ledger.Abstract (
-  applyBlockLedgerResult,
-  reapplyBlockLedgerResult,
-  tickThenApplyLedgerResult,
-  tickThenReapplyLedgerResult,
- )
-import Ouroboros.Consensus.Ledger.Basics (LedgerResult (lrResult), applyChainTickLedgerResult)
-import Ouroboros.Consensus.Ledger.Extended (ExtLedgerCfg (..), ExtLedgerState (headerState), Ticked)
-import Ouroboros.Consensus.Ledger.SupportsProtocol (LedgerSupportsProtocol)
-import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
+import Ouroboros.Consensus.HardFork.Combinator.State.Types
+import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState)
 import Ouroboros.Consensus.Storage.ChainDB as ChainDB
-import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
-import Ouroboros.Consensus.Util.ResourceRegistry
-import RIO.FilePath
-import qualified RIO.Set as Set
 import qualified RIO.Text as T
 
 data Measure = Measure
@@ -59,6 +27,41 @@ data Measure = Measure
   , measureCPUTime :: !Double
   , measureCycles :: !Word64
   }
+  deriving (Eq, Show)
+
+instance Display Measure where
+  display Measure{..} =
+    mconcat
+      [ display measureTime
+      , " "
+      , display measureCPUTime
+      , " "
+      , display measureCycles
+      ]
+
+divMeasure :: Measure -> Word64 -> Measure
+divMeasure m d =
+  Measure
+    { measureTime = measureTime m / fromIntegral d
+    , measureCPUTime = measureCPUTime m / fromIntegral d
+    , measureCycles = measureCycles m `div` d
+    }
+
+instance Semigroup Measure where
+  (<>) m1 m2 =
+    Measure
+      { measureTime = measureTime m1 + measureTime m2
+      , measureCPUTime = measureCPUTime m1 + measureCPUTime m2
+      , measureCycles = measureCycles m1 + measureCycles m2
+      }
+
+instance Monoid Measure where
+  mempty =
+    Measure
+      { measureTime = 0
+      , measureCPUTime = 0
+      , measureCycles = 0
+      }
 
 data BlockStat = BlockStat
   { blockNumTxs :: !Int
@@ -77,6 +80,7 @@ data Stat = Stat
   , blockStat :: {-# UNPACK #-} !BlockStat
   }
 
+measureAction_ :: MonadIO m => m a -> m Measure
 measureAction_ action = do
   startTime <- liftIO getTime
   startCPUTime <- liftIO getCPUTime
@@ -92,8 +96,14 @@ measureAction_ action = do
       , measureCycles = endCycles - startCycles
       }
 
-replayWithBenchmarking initLedgerState = do
-  liftIO initializeTime
+-- replayWithBenchmarking
+--   :: ExtLedgerState (CardanoBlock StandardCrypto)
+--   -> ConduitT
+--       a
+--       Stat
+--       (RIO (DbStreamerApp (CardanoBlock StandardCrypto)))
+--       (ExtLedgerState (CardanoBlock StandardCrypto))
+withBenchmarking f = do
   let
     benchRunTick tickedLedgerState slotNo = do
       measure <- measureAction_ (pure tickedLedgerState)
@@ -105,5 +115,76 @@ replayWithBenchmarking initLedgerState = do
       measure <- measureAction_ (pure extLedgerState)
       let blockStat = BlockStat 0 0 measure
       pure $! Stat tickStat blockStat
-    runWithBench = advanceBlockGranular benchRunTick benchRunBlock
-  runConduit $ void (sourceBlocksWithState GetBlock initLedgerState runWithBench) .| sinkList
+  liftIO initializeTime
+  f benchRunTick benchRunBlock
+
+-- runWithBench = advanceBlockGranular benchRunTick benchRunBlock
+-- sourceBlocksWithState GetBlock initLedgerState runWithBench
+
+data MeasureSummary = MeasureSummary
+  { msMean :: !Measure
+  , -- msMedean :: !Measure -- not possible to compute in streaming fashion
+    -- TODO: implement median estimation algorithm
+    -- ,
+    msSum :: !Measure
+  , msCount :: !Word64
+  }
+
+instance Display MeasureSummary where
+  display = displayMeasure 0
+
+displayMeasure :: Int -> MeasureSummary -> Utf8Builder
+displayMeasure n MeasureSummary{..} =
+  mconcat
+    [ prefix <> "Mean: " <> display msMean
+    , prefix <> "Sum: " <> display msSum
+    , prefix <> "Total: " <> display msCount
+    ]
+  where
+    prefix = "\n" <> display (T.replicate n " ")
+
+data StatsReport = StatsReport
+  { srTick :: !MeasureSummary
+  , srEpoch :: !MeasureSummary
+  , srBlock :: !MeasureSummary
+  }
+
+instance Display StatsReport where
+  display StatsReport{..} =
+    mconcat
+      [ "Ticks:  "
+      , display srTick
+      , "\nEpochs: "
+      , display srEpoch
+      , "\nBlocks: "
+      , display srBlock
+      ]
+
+calcStatsReport :: Monad m => ConduitT Stat Void m StatsReport
+calcStatsReport = do
+  (tick, epoch, block) <- foldlC addMeasure ((mempty, 0), (mempty, 0), (mempty, 0))
+  pure $
+    StatsReport
+      { srTick = uncurry mkMeasureSummary tick
+      , srEpoch = uncurry mkMeasureSummary epoch
+      , srBlock = uncurry mkMeasureSummary block
+      }
+  where
+    addMeasure
+      ( tick@(!tickSum, !tickCount)
+        , epoch@(!epochSum, !epochCount)
+        , (!blockSum, !blockCount)
+        )
+      stat =
+        let !(!tick', !epoch') =
+              case tickEpochNo (tickStat stat) of
+                Nothing -> ((tickSum <> tickMeasure (tickStat stat), tickCount + 1), epoch)
+                Just _ -> (tick, (epochSum <> tickMeasure (tickStat stat), epochCount + 1))
+            !block' = (blockSum <> blockMeasure (blockStat stat), blockCount + 1)
+         in (tick', epoch', block')
+    mkMeasureSummary mSum mCount =
+      MeasureSummary
+        { msMean = mSum `divMeasure` mCount
+        , msSum = mSum
+        , msCount = mCount
+        }
