@@ -45,6 +45,13 @@ import Ouroboros.Consensus.Shelley.Ledger.Block hiding (Header)
 import Ouroboros.Consensus.Shelley.Protocol.Praos ()
 import Ouroboros.Consensus.Shelley.Protocol.TPraos ()
 
+data BlockWithInfo b = BlockWithInfo
+  { biSlotNo :: !SlotNo
+  , biBlockSize :: !Word32
+  , biBlockHeaderSize :: !Word16
+  , biBlockComponent :: !b
+  }
+
 data CardanoEra
   = Byron
   | Shelley

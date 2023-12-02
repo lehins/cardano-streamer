@@ -33,7 +33,7 @@ optsParser =
           <> help
             ( mconcat
                 [ "Path to the directory where Cardano Chain data is located, "
-                , "eg. --db-dir=\"~/.local/share/Daedalus/mainnet/chain\""
+                , "eg. --chain-dir=\"~/.local/share/Daedalus/mainnet/chain\""
                 ]
             )
       )
@@ -99,18 +99,20 @@ optsParser =
                 )
           )
       )
-    <*> ( option
-            auto
-            ( long "stop"
-                <> short 's'
-                <> help
-                  ( mconcat
-                      [ "Stop replaying the chain at this slot number. "
-                      , "When no stopping slot number is provided, then the replay will "
-                      , "continue until the end of the immutable chain is reached."
-                      ]
-                  )
-            )
+    <*> ( ( Just
+              <$> option
+                auto
+                ( long "stop"
+                    <> short 's'
+                    <> help
+                      ( mconcat
+                          [ "Stop replaying the chain at this slot number. "
+                          , "When no stopping slot number is provided, then the replay will "
+                          , "continue until the end of the immutable chain is reached."
+                          ]
+                      )
+                )
+          )
             <|> pure Nothing
         )
     <*> option

@@ -25,11 +25,11 @@ module Cardano.Streamer.Common (
 import qualified Cardano.Address as A
 import qualified Cardano.Address.Style.Shelley as A
 import Cardano.Crypto.Hash.Class (hashFromBytes)
+import Cardano.Ledger.BaseTypes (SlotNo (..))
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Crypto
 import Cardano.Ledger.Hashes
 import Cardano.Ledger.Keys
---import Cardano.Streamer.Benchmark (replayCalcStatsReport)
 import Control.Monad.Trans.Except
 import Control.Tracer (Tracer (..))
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
@@ -91,6 +91,8 @@ data DbStreamerApp blk = DbStreamerApp
   , dsAppIDb :: !(ImmutableDB.ImmutableDB IO blk)
   , dsAppOutDir :: !(Maybe FilePath)
   -- ^ Output directory where to write files
+  , dsStopSlotNo :: !(Maybe SlotNo)
+  -- ^ Last slot number to execute
   , dsValidationMode :: !ValidationMode
   }
 

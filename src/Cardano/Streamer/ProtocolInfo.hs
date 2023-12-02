@@ -12,7 +12,7 @@ module Cardano.Streamer.ProtocolInfo where
 
 import qualified Cardano.Api as Api
 import Cardano.Chain.Update (ApplicationName (..), SoftwareVersion (..))
-import Cardano.Ledger.BaseTypes (natVersion)
+import Cardano.Ledger.BaseTypes (SlotNo (..), natVersion)
 import Cardano.Streamer.Common
 import Codec.Serialise (Serialise (decode))
 import Control.Monad.Trans.Except
@@ -21,7 +21,7 @@ import Ouroboros.Consensus.Block.NestedContent (NestedCtxt)
 import Ouroboros.Consensus.Byron.Node
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Cardano.Node (
-  --ProtocolTransitionParamsShelleyBased (..),
+  -- ProtocolTransitionParamsShelleyBased (..),
   protocolInfoCardano,
  )
 import Ouroboros.Consensus.Config (configCodec, configSecurityParam, configStorage)
@@ -187,6 +187,7 @@ runDbStreamerApp action = do
             , dsAppChainDbArgs = dbArgs
             , dsAppIDb = iDb
             , dsAppOutDir = Nothing
+            , dsStopSlotNo = SlotNo <$> appConfStopSlotNumber appConf
             , dsValidationMode = appConfValidationMode appConf
             }
      in runRIO app (getInitLedgerState (appConfReadDiskSnapshot appConf) >>= action)
