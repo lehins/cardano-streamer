@@ -1,9 +1,11 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-
+{-# LANGUAGE StandaloneDeriving #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 module Cardano.Streamer.Common (
   DbStreamerApp (..),
   AppConfig (..),
@@ -43,6 +45,8 @@ type RIO env = ReaderT env IO
 
 runRIO :: MonadIO m => r -> RIO r a -> m a
 runRIO env = liftIO . flip runReaderT env
+
+deriving instance Display SlotNo
 
 class HasResourceRegistry env where
   registryL :: Lens' env (ResourceRegistry IO)

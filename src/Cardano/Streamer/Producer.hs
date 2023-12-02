@@ -54,17 +54,14 @@ import qualified RIO.Text as T
 
 sourceBlocks
   :: ( MonadIO m
-     , MonadReader env m
-     , HasImmutableDb env blk
-     , HasResourceRegistry env
+     , MonadReader (DbStreamerApp blk) m
      , HasHeader blk
      , HasAnnTip blk
      )
-  => Maybe SlotNo
-  -> BlockComponent blk b
+  => BlockComponent blk b
   -> WithOrigin (AnnTip blk)
   -> ConduitT i (BlockWithInfo b) m ()
-sourceBlocks mStopSlotNo blockComponent withOriginAnnTip = do
+sourceBlocks blockComponent withOriginAnnTip = do
   registry <- view registryL
   iDb <- view iDbL
   let blockComponents =
@@ -74,6 +71,7 @@ sourceBlocks mStopSlotNo blockComponent withOriginAnnTip = do
       ImmutableDB.streamAll iDb registry blockComponents
     NotOrigin annTip ->
       ImmutableDB.streamAfterKnownPoint iDb registry blockComponents (annTipPoint annTip)
+  mStopSlotNo <- dsStopSlotNo <$> ask
   case mStopSlotNo of
     Nothing ->
       fix $ \loop ->
@@ -86,63 +84,55 @@ sourceBlocks mStopSlotNo blockComponent withOriginAnnTip = do
         liftIO (ImmutableDB.iteratorNext itr) >>= \case
           ImmutableDB.IteratorExhausted -> pure ()
           ImmutableDB.IteratorResult (slotNo, _, _, _)
-            | slotNo > stopSlotNo -> pure ()
+            | slotNo > stopSlotNo ->
+                logInfo $ "Stopped right before processing slot number: " <> display slotNo
           ImmutableDB.IteratorResult (slotNo, blockSize, headerSize, comp) ->
             yield (BlockWithInfo slotNo blockSize headerSize comp) >> loop
 
 foldBlocksWithState
   :: ( MonadIO m
-     , MonadReader env m
-     , HasImmutableDb env blk
-     , HasResourceRegistry env
+     , MonadReader (DbStreamerApp blk) m
      , HasHeader blk
      , HasAnnTip blk
      )
-  => Maybe SlotNo
-  -> BlockComponent blk b
+  => BlockComponent blk b
   -> ExtLedgerState blk
   -- ^ Initial ledger state
   -> (ExtLedgerState blk -> BlockWithInfo b -> m (ExtLedgerState blk))
   -- ^ Function to process each block with current ledger state
   -> ConduitT a c m (ExtLedgerState blk)
-foldBlocksWithState mStopSlotNo blockComponent initState action = do
+foldBlocksWithState blockComponent initState action = do
   let withOriginAnnTip = headerStateTip (headerState initState)
-  sourceBlocks mStopSlotNo blockComponent withOriginAnnTip .| foldMC action initState
+  sourceBlocks  blockComponent withOriginAnnTip .| foldMC action initState
 
 sourceBlocksWithState
   :: ( MonadIO m
-     , MonadReader env m
-     , HasResourceRegistry env
-     , HasImmutableDb env blk
+     , MonadReader (DbStreamerApp blk) m
      , HasHeader blk
      , HasAnnTip blk
      )
-  => Maybe SlotNo
-  -> BlockComponent blk b
+  => BlockComponent blk b
   -> ExtLedgerState blk
   -> (ExtLedgerState blk -> BlockWithInfo b -> m (ExtLedgerState blk, c))
   -> ConduitT a c m (ExtLedgerState blk)
-sourceBlocksWithState mStopSlotNo blockComponent initState action =
+sourceBlocksWithState blockComponent initState action =
   fmap fst $
-    sourceBlocksWithAccState mStopSlotNo blockComponent initState () $
+    sourceBlocksWithAccState blockComponent initState () $
       \s a b -> (\(s', c) -> (s', a, c)) <$> action s b
 
 sourceBlocksWithAccState
   :: ( MonadIO m
-     , MonadReader env m
-     , HasResourceRegistry env
-     , HasImmutableDb env blk
+     , MonadReader (DbStreamerApp blk) m
      , HasHeader blk
      , HasAnnTip blk
      )
-  => Maybe SlotNo
-  -> BlockComponent blk b
+  => BlockComponent blk b
   -> ExtLedgerState blk
   -> e
   -> (ExtLedgerState blk -> e -> BlockWithInfo b -> m (ExtLedgerState blk, e, c))
   -> ConduitT a c m (ExtLedgerState blk, e)
-sourceBlocksWithAccState mStopSlotNo blockComponent initState acc0 action = do
-  sourceBlocks mStopSlotNo blockComponent withOriginAnnTip .| go initState acc0
+sourceBlocksWithAccState blockComponent initState acc0 action = do
+  sourceBlocks blockComponent withOriginAnnTip .| go initState acc0
   where
     withOriginAnnTip = headerStateTip (headerState initState)
     go !ledgerState !acc =
@@ -203,8 +193,7 @@ validateLedger
   => ExtLedgerState b
   -> RIO (DbStreamerApp b) (ExtLedgerState b)
 validateLedger initLedgerState = do
-  mStopSlotNo <- dsStopSlotNo <$> ask
-  runConduit $ foldBlocksWithState mStopSlotNo GetBlock initLedgerState validateBlock
+  runConduit $ foldBlocksWithState GetBlock initLedgerState validateBlock
 
 revalidatePrintBlock
   :: ExtLedgerState (CardanoBlock StandardCrypto)
@@ -426,10 +415,9 @@ countTxOuts
   :: ExtLedgerState (CardanoBlock StandardCrypto)
   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) Int
 countTxOuts initLedgerState = do
-  mStopSlotNo <- dsStopSlotNo <$> ask
   getSum
     <$> runConduit
-      ( void (sourceBlocksWithState mStopSlotNo GetBlock initLedgerState revalidatePrintBlock)
+      ( void (sourceBlocksWithState GetBlock initLedgerState revalidatePrintBlock)
           .| foldMapMC (liftIO . evaluate . foldMap' (fromIntegral . tpOutsCount) . bpTxsSummary)
       )
 
@@ -437,10 +425,9 @@ revalidateWriteNewEpochState
   :: ExtLedgerState (CardanoBlock StandardCrypto)
   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) ()
 revalidateWriteNewEpochState initLedgerState = do
-  mStopSlotNo <- dsStopSlotNo <$> ask
   (extLedgerState, mBlockSummary) <-
     runConduit $
-      sourceBlocksWithState mStopSlotNo GetBlock initLedgerState revalidatePrintBlock
+      sourceBlocksWithState GetBlock initLedgerState revalidatePrintBlock
         `fuseBoth` lastC
   case mBlockSummary of
     Nothing -> logError "No blocks where discovered on chain"
@@ -455,19 +442,17 @@ replayChain
   :: ExtLedgerState (CardanoBlock StandardCrypto)
   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (ExtLedgerState (CardanoBlock StandardCrypto))
 replayChain initLedgerState = do
-  mStopSlotNo <- dsStopSlotNo <$> ask
-  runConduit $ foldBlocksWithState mStopSlotNo GetBlock initLedgerState advanceBlock_
+  runConduit $ foldBlocksWithState GetBlock initLedgerState advanceBlock_
 
 computeRewards
   :: Set (Credential 'Staking StandardCrypto)
   -> ExtLedgerState (CardanoBlock StandardCrypto)
   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) [RewardsPerEpoch StandardCrypto]
 computeRewards creds initLedgerState = do
-  mStopSlotNo <- dsStopSlotNo <$> ask
   -- (extLedgerState, rs) <-
   runConduit $
     void
-      ( sourceBlocksWithAccState mStopSlotNo GetBlock initLedgerState emptyRewardsState $
+      ( sourceBlocksWithAccState GetBlock initLedgerState emptyRewardsState $
           accumNewRewards creds
       )
       .| concatMapC id
@@ -492,9 +477,8 @@ replayWithBenchmarking
       (RIO (DbStreamerApp (CardanoBlock StandardCrypto)))
       (ExtLedgerState (CardanoBlock StandardCrypto))
 replayWithBenchmarking initLedgerState = do
-  mStopSlotNo <- dsStopSlotNo <$> ask
   withBenchmarking $ \benchRunTick benchRunBlock ->
-    sourceBlocksWithState mStopSlotNo GetBlock initLedgerState $
+    sourceBlocksWithState GetBlock initLedgerState $
       advanceBlockGranular benchRunTick benchRunBlock
 
 runApp :: Opts -> IO ()

@@ -126,8 +126,8 @@ optsParser =
       readLogLevel
       ( long "log-level"
           <> metavar "LOG_LEVEL"
-          <> value LevelWarn
-          <> help "Set the minimum log level: 'debug|info|warn|error'. Default is 'warn'"
+          <> value LevelInfo
+          <> help "Set the minimum log level: 'debug|info|warn|error'. Default is 'info'"
       )
     <*> switch (long "verbose" <> short 'v' <> help "Enable verbose output")
     <*> switch (long "debug" <> short 'd' <> help "Enable debug output")
