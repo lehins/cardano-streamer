@@ -193,22 +193,22 @@ revalidatePrintBlock
   -> CardanoBlock StandardCrypto
   -> RIO
       (DbStreamerApp (CardanoBlock StandardCrypto))
-      (ExtLedgerState (CardanoBlock StandardCrypto), BlockPrecis)
+      (ExtLedgerState (CardanoBlock StandardCrypto), BlockSummary)
 revalidatePrintBlock !prevLedger !block = do
-  let !blockPrecis = getBlockPrecis block
+  let !blockSummary = getBlockSummary block
       EpochNo epochNo = extLedgerStateEpochNo prevLedger
-  when (unSlotNo (bpSlotNo blockPrecis) `mod` 100 == 0) $
+  when (unSlotNo (bpSlotNo blockSummary) `mod` 100 == 0) $
     logSticky $
       "["
-        <> displayShow (bpEra blockPrecis)
+        <> displayShow (bpEra blockSummary)
         <> " <epoch "
         <> displayShow epochNo
         <> ">: "
-        <> displayShow (bpSlotNo blockPrecis)
+        <> displayShow (bpSlotNo blockSummary)
         <> "]"
   ledgerCfg <- ExtLedgerCfg . pInfoConfig . dsAppProtocolInfo <$> ask
   let !result = lrResult $ tickThenReapplyLedgerResult ledgerCfg block prevLedger
-  pure (result, blockPrecis)
+  pure (result, blockSummary)
 
 advanceBlockGranular
   :: ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto))
@@ -408,22 +408,22 @@ countTxOuts initLedgerState =
   getSum
     <$> runConduit
       ( void (sourceBlocksWithState GetBlock initLedgerState revalidatePrintBlock)
-          .| foldMapMC (liftIO . evaluate . foldMap' (fromIntegral . tpOutsCount) . bpTxsPrecis)
+          .| foldMapMC (liftIO . evaluate . foldMap' (fromIntegral . tpOutsCount) . bpTxsSummary)
       )
 
 revalidateWriteNewEpochState
   :: ExtLedgerState (CardanoBlock StandardCrypto)
   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) ()
 revalidateWriteNewEpochState initLedgerState = do
-  (extLedgerState, mBlockPrecis) <-
+  (extLedgerState, mBlockSummary) <-
     runConduit $
       sourceBlocksWithState GetBlock initLedgerState revalidatePrintBlock `fuseBoth` lastC
-  case mBlockPrecis of
+  case mBlockSummary of
     Nothing -> logError "No blocks where discovered on chain"
-    Just lastBlockPrecis -> do
+    Just lastBlockSummary -> do
       mDir <- dsAppOutDir <$> ask
       forM_ mDir $ \dir -> do
-        let slotNo = unSlotNo (bpSlotNo lastBlockPrecis)
+        let slotNo = unSlotNo (bpSlotNo lastBlockSummary)
             filePath = dir </> "new-epoch-state_" ++ show slotNo ++ ".cbor"
         writeNewEpochState filePath extLedgerState
 
