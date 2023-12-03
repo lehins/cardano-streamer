@@ -5,6 +5,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Cardano.Streamer.Producer where
 
@@ -89,37 +90,6 @@ sourceBlocks blockComponent withOriginAnnTip = do
           ImmutableDB.IteratorResult (slotNo, blockSize, headerSize, comp) ->
             yield (BlockWithInfo slotNo blockSize headerSize comp) >> loop
 
-foldBlocksWithState
-  :: ( MonadIO m
-     , MonadReader (DbStreamerApp blk) m
-     , HasHeader blk
-     , HasAnnTip blk
-     )
-  => BlockComponent blk b
-  -> ExtLedgerState blk
-  -- ^ Initial ledger state
-  -> (ExtLedgerState blk -> BlockWithInfo b -> m (ExtLedgerState blk))
-  -- ^ Function to process each block with current ledger state
-  -> ConduitT a c m (ExtLedgerState blk)
-foldBlocksWithState blockComponent initState action = do
-  let withOriginAnnTip = headerStateTip (headerState initState)
-  sourceBlocks  blockComponent withOriginAnnTip .| foldMC action initState
-
-sourceBlocksWithState
-  :: ( MonadIO m
-     , MonadReader (DbStreamerApp blk) m
-     , HasHeader blk
-     , HasAnnTip blk
-     )
-  => BlockComponent blk b
-  -> ExtLedgerState blk
-  -> (ExtLedgerState blk -> BlockWithInfo b -> m (ExtLedgerState blk, c))
-  -> ConduitT a c m (ExtLedgerState blk)
-sourceBlocksWithState blockComponent initState action =
-  fmap fst $
-    sourceBlocksWithAccState blockComponent initState () $
-      \s a b -> (\(s', c) -> (s', a, c)) <$> action s b
-
 sourceBlocksWithAccState
   :: ( MonadIO m
      , MonadReader (DbStreamerApp blk) m
@@ -143,80 +113,59 @@ sourceBlocksWithAccState blockComponent initState acc0 action = do
           yield c
           go ledgerState' acc'
 
-validateBlock
-  :: LedgerSupportsProtocol blk
-  => ExtLedgerState blk
-  -> BlockWithInfo blk
-  -> RIO (DbStreamerApp blk) (ExtLedgerState blk)
-validateBlock !prevLedger !bwi = do
-  ledgerCfg <- ExtLedgerCfg . pInfoConfig . dsAppProtocolInfo <$> ask
-  either (throwString . show) (pure . lrResult) $
-    runExcept $
-      tickThenApplyLedgerResult ledgerCfg (biBlockComponent bwi) prevLedger
+sourceBlocksWithState
+  :: ( MonadIO m
+     , MonadReader (DbStreamerApp blk) m
+     , HasHeader blk
+     , HasAnnTip blk
+     )
+  => BlockComponent blk b
+  -> ExtLedgerState blk
+  -> (ExtLedgerState blk -> BlockWithInfo b -> m (ExtLedgerState blk, c))
+  -> ConduitT a c m (ExtLedgerState blk)
+sourceBlocksWithState blockComponent initState action =
+  fmap fst $
+    sourceBlocksWithAccState blockComponent initState () $
+      \s a b -> (\(s', c) -> (s', a, c)) <$> action s b
 
--- validatePrintBlock
+foldBlocksWithState
+  :: ( MonadIO m
+     , MonadReader (DbStreamerApp blk) m
+     , HasHeader blk
+     , HasAnnTip blk
+     )
+  => BlockComponent blk b
+  -> ExtLedgerState blk
+  -- ^ Initial ledger state
+  -> (ExtLedgerState blk -> BlockWithInfo b -> m (ExtLedgerState blk))
+  -- ^ Function to process each block with current ledger state
+  -> ConduitT a c m (ExtLedgerState blk)
+foldBlocksWithState blockComponent initState action = do
+  let withOriginAnnTip = headerStateTip (headerState initState)
+  sourceBlocks blockComponent withOriginAnnTip .| foldMC action initState
+
+-- revalidatePrintBlock
 --   :: ExtLedgerState (CardanoBlock StandardCrypto)
---   -> CardanoBlock StandardCrypto
---   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (ExtLedgerState (CardanoBlock StandardCrypto))
--- validatePrintBlock !prevLedger !block = do
---   let (era, slotNo) = getSlotNoWithEra block
---   when (unSlotNo slotNo `mod` 10 == 0) $
+--   -> BlockWithInfo (CardanoBlock StandardCrypto)
+--   -> RIO
+--       (DbStreamerApp (CardanoBlock StandardCrypto))
+--       (ExtLedgerState (CardanoBlock StandardCrypto), BlockSummary)
+-- revalidatePrintBlock !prevLedger !bwi = do
+--   let !block = biBlockComponent bwi
+--       !blockSummary = getBlockSummary block
+--       EpochNo epochNo = extLedgerStateEpochNo prevLedger
+--   when (unSlotNo (bpSlotNo blockSummary) `mod` 100 == 0) $
 --     logSticky $
---       displayShow era <> ":[" <> displayShow slotNo <> "]"
+--       "["
+--         <> displayShow (bpEra blockSummary)
+--         <> " <epoch "
+--         <> displayShow epochNo
+--         <> ">: "
+--         <> displayShow (bpSlotNo blockSummary)
+--         <> "]"
 --   ledgerCfg <- ExtLedgerCfg . pInfoConfig . dsAppProtocolInfo <$> ask
---   let result =
---         runExcept $
---           tickThenApplyLedgerResult ledgerCfg block prevLedger
---   case result of
---     Right lr -> pure $ lrResult lr
---     Left err -> do
---       logSticky $
---         displayShow era <> ":[" <> displayShow slotNo <> "]"
---       let rawBlock = getRawBlock block
---           blockHashHex = hashToTextAsHex (extractHash (rawBlockHash rawBlock))
---       logError "Encountered an error while validating a block: "
---       mOutDir <- dsAppOutDir <$> ask
---       forM_ mOutDir $ \outDir -> do
---         let prefix = outDir </> show (unSlotNo slotNo) <> "_" <> blockHashHex
---             mkTxFileName ix = prefix <> "#" <> show ix <.> "cbor"
---             fileNameBlock = prefix <.> "cbor"
---         writeFileBinary fileNameBlock (rawBlockBytes rawBlock)
---         writeNewEpochState (outDir </> show (unSlotNo slotNo) <.> "cbor") prevLedger
---         applyBlockTxs
---           (liftIO . print)
---           (zipWithM_ (\ix -> writeTx (mkTxFileName ix)) [0 :: Int ..])
---           block
---       throwString . show $ err
-
-validateLedger
-  :: LedgerSupportsProtocol b
-  => ExtLedgerState b
-  -> RIO (DbStreamerApp b) (ExtLedgerState b)
-validateLedger initLedgerState = do
-  runConduit $ foldBlocksWithState GetBlock initLedgerState validateBlock
-
-revalidatePrintBlock
-  :: ExtLedgerState (CardanoBlock StandardCrypto)
-  -> BlockWithInfo (CardanoBlock StandardCrypto)
-  -> RIO
-      (DbStreamerApp (CardanoBlock StandardCrypto))
-      (ExtLedgerState (CardanoBlock StandardCrypto), BlockSummary)
-revalidatePrintBlock !prevLedger !bwi = do
-  let !block = biBlockComponent bwi
-      !blockSummary = getBlockSummary block
-      EpochNo epochNo = extLedgerStateEpochNo prevLedger
-  when (unSlotNo (bpSlotNo blockSummary) `mod` 100 == 0) $
-    logSticky $
-      "["
-        <> displayShow (bpEra blockSummary)
-        <> " <epoch "
-        <> displayShow epochNo
-        <> ">: "
-        <> displayShow (bpSlotNo blockSummary)
-        <> "]"
-  ledgerCfg <- ExtLedgerCfg . pInfoConfig . dsAppProtocolInfo <$> ask
-  let !result = lrResult $ tickThenReapplyLedgerResult ledgerCfg block prevLedger
-  pure (result, blockSummary)
+--   let !result = lrResult $ tickThenReapplyLedgerResult ledgerCfg block prevLedger
+--   pure (result, blockSummary)
 
 advanceBlockGranular
   :: ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto))
@@ -237,50 +186,51 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
   let slotNo = biSlotNo bwi
       block = biBlockComponent bwi
       era = getCardanoEra block
-  when (unSlotNo slotNo `mod` 100 == 0) $ do
-    let epochNo = extLedgerStateEpochNo prevLedger
-    logSticky $
-      "["
-        <> displayShow era
-        <> ": EpochNo "
-        <> display (unEpochNo epochNo)
-        <> " - "
-        <> displayShow slotNo
-        <> "]"
+      epochNo = extLedgerStateEpochNo prevLedger
+      logStickyStatus =
+        logSticky $
+          "["
+            <> displayShow era
+            <> ": EpochNo "
+            <> display (unEpochNo epochNo)
+            <> " - "
+            <> displayShow slotNo
+            <> "]"
+  when (unSlotNo slotNo `mod` 100 == 0) logStickyStatus
   app <- ask
   let ledgerCfg = ExtLedgerCfg . pInfoConfig $ dsAppProtocolInfo app
       lrTick = applyChainTickLedgerResult ledgerCfg slotNo prevLedger
       lrTickResult = lrResult lrTick
-  a <- inspectTickState lrTickResult slotNo
-  case dsValidationMode app of
-    FullValidation -> do
-      case runExcept (applyBlockLedgerResult ledgerCfg block lrTickResult) of
-        Right lrBlock -> do
-          let lrBlockResult = lrResult lrBlock
-          b <- inspectBlockState lrTickResult lrBlockResult a
-          pure (lrBlockResult, b)
-        Left errorMessage -> reportValidationError errorMessage era slotNo block prevLedger
-    ReValidation -> do
-      let lrBlock = reapplyBlockLedgerResult ledgerCfg block (lrResult lrTick)
-      b <- inspectBlockState (lrResult lrTick) (lrResult lrBlock) a
-      pure (lrResult lrBlock, b)
+      reportException (exc :: SomeException) =
+        when (isSyncException exc) $ do
+          logStickyStatus
+          logError $ "Received an exception: " <> displayShow exc
+          reportValidationError exc slotNo block prevLedger
+  flip withException reportException $ do
+    a <- inspectTickState lrTickResult slotNo
+    case dsValidationMode app of
+      FullValidation -> do
+        case runExcept (applyBlockLedgerResult ledgerCfg block lrTickResult) of
+          Right lrBlock -> do
+            let lrBlockResult = lrResult lrBlock
+            b <- inspectBlockState lrTickResult lrBlockResult a
+            pure (lrBlockResult, b)
+          Left errorMessage -> do
+            logStickyStatus
+            reportValidationError errorMessage slotNo block prevLedger
+      ReValidation -> do
+        let lrBlock = reapplyBlockLedgerResult ledgerCfg block (lrResult lrTick)
+        b <- inspectBlockState (lrResult lrTick) (lrResult lrBlock) a
+        pure (lrResult lrBlock, b)
 
 reportValidationError
-  :: ( MonadReader (DbStreamerApp blk) m
-     , MonadIO m
-     , Show b
-     , Show a
-     , Crypto c
-     )
+  :: (MonadReader (DbStreamerApp blk) m, MonadIO m, Show a, Crypto c)
   => a
-  -> b
   -> SlotNo
   -> CardanoBlock c
   -> ExtLedgerState (CardanoBlock c)
   -> m d
-reportValidationError errorMessage era slotNo block ledgerState = do
-  logSticky $
-    displayShow era <> ":[" <> displayShow slotNo <> "]"
+reportValidationError errorMessage slotNo block ledgerState = do
   let rawBlock = getRawBlock block
       blockHashHex = hashToTextAsHex (extractHash (rawBlockHash rawBlock))
   logError $
@@ -411,32 +361,32 @@ accumNewRewards creds prevExtLedgerState rs bwi = do
   forM_ mRewardsPerEpoch (logInfo . display)
   pure (newExtLedgerState, newRewardsState, mRewardsPerEpoch)
 
-countTxOuts
-  :: ExtLedgerState (CardanoBlock StandardCrypto)
-  -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) Int
-countTxOuts initLedgerState = do
-  getSum
-    <$> runConduit
-      ( void (sourceBlocksWithState GetBlock initLedgerState revalidatePrintBlock)
-          .| foldMapMC (liftIO . evaluate . foldMap' (fromIntegral . tpOutsCount) . bpTxsSummary)
-      )
+-- countTxOuts
+--   :: ExtLedgerState (CardanoBlock StandardCrypto)
+--   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) Int
+-- countTxOuts initLedgerState = do
+--   getSum
+--     <$> runConduit
+--       ( void (sourceBlocksWithState GetBlock initLedgerState revalidatePrintBlock)
+--           .| foldMapMC (liftIO . evaluate . foldMap' (fromIntegral . tpOutsCount) . bpTxsSummary)
+--       )
 
-revalidateWriteNewEpochState
-  :: ExtLedgerState (CardanoBlock StandardCrypto)
-  -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) ()
-revalidateWriteNewEpochState initLedgerState = do
-  (extLedgerState, mBlockSummary) <-
-    runConduit $
-      sourceBlocksWithState GetBlock initLedgerState revalidatePrintBlock
-        `fuseBoth` lastC
-  case mBlockSummary of
-    Nothing -> logError "No blocks where discovered on chain"
-    Just lastBlockSummary -> do
-      mDir <- dsAppOutDir <$> ask
-      forM_ mDir $ \dir -> do
-        let slotNo = unSlotNo (bpSlotNo lastBlockSummary)
-            filePath = dir </> "new-epoch-state_" ++ show slotNo ++ ".cbor"
-        writeNewEpochState filePath extLedgerState
+-- revalidateWriteNewEpochState
+--   :: ExtLedgerState (CardanoBlock StandardCrypto)
+--   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) ()
+-- revalidateWriteNewEpochState initLedgerState = do
+--   (extLedgerState, mBlockSummary) <-
+--     runConduit $
+--       sourceBlocksWithState GetBlock initLedgerState revalidatePrintBlock
+--         `fuseBoth` lastC
+--   case mBlockSummary of
+--     Nothing -> logError "No blocks where discovered on chain"
+--     Just lastBlockSummary -> do
+--       mDir <- dsAppOutDir <$> ask
+--       forM_ mDir $ \dir -> do
+--         let slotNo = unSlotNo (bpSlotNo lastBlockSummary)
+--             filePath = dir </> "new-epoch-state_" ++ show slotNo ++ ".cbor"
+--         writeNewEpochState filePath extLedgerState
 
 replayChain
   :: ExtLedgerState (CardanoBlock StandardCrypto)

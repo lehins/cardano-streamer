@@ -20,9 +20,10 @@ library
   exposed-modules:     Cardano.Streamer.Common
                      , Cardano.Streamer.Benchmark
                      , Cardano.Streamer.BlockInfo
-                     , Cardano.Streamer.Producer
                      , Cardano.Streamer.LedgerState
+                     , Cardano.Streamer.Producer
                      , Cardano.Streamer.ProtocolInfo
+                     , Cardano.Streamer.Time
 
                     -- TODO: finish and reinstate when `io-classes-1.0` is in use.
                     --

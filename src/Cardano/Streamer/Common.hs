@@ -6,6 +6,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
+
 module Cardano.Streamer.Common (
   DbStreamerApp (..),
   AppConfig (..),
@@ -27,11 +28,12 @@ module Cardano.Streamer.Common (
 import qualified Cardano.Address as A
 import qualified Cardano.Address.Style.Shelley as A
 import Cardano.Crypto.Hash.Class (hashFromBytes)
-import Cardano.Ledger.BaseTypes (SlotNo (..))
+import Cardano.Ledger.BaseTypes (EpochNo (..), SlotNo (..))
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Crypto
 import Cardano.Ledger.Hashes
 import Cardano.Ledger.Keys
+import Cardano.Streamer.Time
 import Control.Monad.Trans.Except
 import Control.Tracer (Tracer (..))
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
@@ -47,6 +49,7 @@ runRIO :: MonadIO m => r -> RIO r a -> m a
 runRIO env = liftIO . flip runReaderT env
 
 deriving instance Display SlotNo
+deriving instance Display EpochNo
 
 class HasResourceRegistry env where
   registryL :: Lens' env (ResourceRegistry IO)
