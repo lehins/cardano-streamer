@@ -70,18 +70,20 @@ optsParser =
             )
             <|> pure Nothing
         )
-    <*> ( option
-            auto
-            ( long "read-snapshot"
-                <> short 'r'
-                <> help
-                  ( mconcat
-                      [ "Read a Snapshot with this slot number. "
-                      , "Also see a relevant --snapshot-suffix flag. "
-                      , "Results in failure if a snapshot does not exist."
-                      ]
-                  )
-            )
+    <*> ( ( Just
+              <$> option
+                auto
+                ( long "read-snapshot"
+                    <> short 'r'
+                    <> help
+                      ( mconcat
+                          [ "Read a Snapshot with this slot number. "
+                          , "Also see a relevant --snapshot-suffix flag. "
+                          , "Results in failure if a snapshot does not exist."
+                          ]
+                      )
+                )
+          )
             <|> pure Nothing
         )
     <*> many

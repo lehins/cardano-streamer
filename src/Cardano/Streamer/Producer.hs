@@ -6,6 +6,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 
 module Cardano.Streamer.Producer where
 
@@ -15,6 +16,7 @@ import Cardano.Ledger.Credential
 import Cardano.Ledger.Crypto
 import Cardano.Ledger.Keys
 import Cardano.Ledger.SafeHash (extractHash)
+import Cardano.Slotting.Slot (WithOrigin (..))
 import Cardano.Streamer.Benchmark
 import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
@@ -22,7 +24,6 @@ import Cardano.Streamer.LedgerState (detectNewRewards, extLedgerStateEpochNo, wr
 import Cardano.Streamer.ProtocolInfo
 import Conduit
 import Control.Monad.Trans.Except
-import Data.Foldable
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Merge.Strict as Map
 import qualified Data.Map.Strict as Map
@@ -30,7 +31,7 @@ import Data.Monoid
 import Ouroboros.Consensus.Block
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.HeaderValidation (
-  AnnTip,
+  AnnTip (annTipSlotNo),
   HasAnnTip (..),
   annTipPoint,
   headerStateTip,
@@ -45,11 +46,14 @@ import Ouroboros.Consensus.Ledger.Basics (LedgerResult (lrResult), applyChainTic
 import Ouroboros.Consensus.Ledger.Extended (ExtLedgerCfg (..), ExtLedgerState (headerState), Ticked)
 import Ouroboros.Consensus.Ledger.SupportsProtocol (LedgerSupportsProtocol)
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
+import Ouroboros.Consensus.Protocol.Abstract (ChainDepState)
 import Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
+import Ouroboros.Consensus.Storage.Serialisation (EncodeDisk)
 import Ouroboros.Consensus.Util.ResourceRegistry
 import RIO.FilePath
+import RIO.List as List
 import qualified RIO.Set as Set
 import qualified RIO.Text as T
 
@@ -72,7 +76,7 @@ sourceBlocks blockComponent withOriginAnnTip = do
       ImmutableDB.streamAll iDb registry blockComponents
     NotOrigin annTip ->
       ImmutableDB.streamAfterKnownPoint iDb registry blockComponents (annTipPoint annTip)
-  mStopSlotNo <- dsStopSlotNo <$> ask
+  mStopSlotNo <- dsAppStopSlotNo <$> ask
   case mStopSlotNo of
     Nothing ->
       fix $ \loop ->
@@ -86,7 +90,8 @@ sourceBlocks blockComponent withOriginAnnTip = do
           ImmutableDB.IteratorExhausted -> pure ()
           ImmutableDB.IteratorResult (slotNo, _, _, _)
             | slotNo > stopSlotNo ->
-                logInfo $ "Stopped right before processing slot number: " <> display slotNo
+                logInfo $ "Stopped right before processing slot number " <> display slotNo <>
+                " because hard stop was specified at slot number " <> display stopSlotNo
           ImmutableDB.IteratorResult (slotNo, blockSize, headerSize, comp) ->
             yield (BlockWithInfo slotNo blockSize headerSize comp) >> loop
 
@@ -95,6 +100,9 @@ sourceBlocksWithAccState
      , MonadReader (DbStreamerApp blk) m
      , HasHeader blk
      , HasAnnTip blk
+     , EncodeDisk blk (AnnTip blk)
+     , EncodeDisk blk (LedgerState blk)
+     , EncodeDisk blk (ChainDepState (BlockProtocol blk))
      )
   => BlockComponent blk b
   -> ExtLedgerState blk
@@ -102,22 +110,47 @@ sourceBlocksWithAccState
   -> (ExtLedgerState blk -> e -> BlockWithInfo b -> m (ExtLedgerState blk, e, c))
   -> ConduitT a c m (ExtLedgerState blk, e)
 sourceBlocksWithAccState blockComponent initState acc0 action = do
-  sourceBlocks blockComponent withOriginAnnTip .| go initState acc0
+  let prepareDiskSnapshots ds =
+        sortOn dsNumber $
+          case annTipSlotNo <$> headerStateTip (headerState initState) of
+            Origin -> ds
+            At (SlotNo curSlotNo) -> List.filter ((> curSlotNo) . dsNumber) ds
+  diskSnapshotsToWrite <- prepareDiskSnapshots . dbAppWriteDiskSnapshots <$> ask
+  sourceBlocks blockComponent withOriginAnnTip
+    .| loopWithSnapshotWriting initState (acc0, diskSnapshotsToWrite)
   where
     withOriginAnnTip = headerStateTip (headerState initState)
-    go !ledgerState !acc =
+    writeSnapshots ledgerState curSlotNo = fix $ \go -> \case
+      [] -> pure []
+      dss@(s : ss)
+        | dsNumber s <= curSlotNo -> writeLedgerState s ledgerState >> go ss
+        | otherwise -> pure dss
+    loopWithSnapshotWriting !ledgerState (!acc, !dss) =
       await >>= \case
         Nothing -> pure (ledgerState, acc)
-        Just b -> do
-          (ledgerState', acc', c) <- lift $ action ledgerState acc b
+        Just bwi -> do
+          (ledgerState', acc', c) <- lift $ action ledgerState acc bwi
           yield c
-          go ledgerState' acc'
+          let SlotNo curSlotNo = biSlotNo bwi
+          writeSnapshots ledgerState' curSlotNo dss >>= \case
+            [] -> loopWithoutSnapshotWriting ledgerState' acc'
+            ss -> loopWithSnapshotWriting ledgerState' (acc', ss)
+    loopWithoutSnapshotWriting !ledgerState !acc =
+      await >>= \case
+        Nothing -> pure (ledgerState, acc)
+        Just bwi -> do
+          (ledgerState', acc', c) <- lift $ action ledgerState acc bwi
+          yield c
+          loopWithoutSnapshotWriting ledgerState' acc'
 
 sourceBlocksWithState
   :: ( MonadIO m
      , MonadReader (DbStreamerApp blk) m
      , HasHeader blk
      , HasAnnTip blk
+     , EncodeDisk blk (AnnTip blk)
+     , EncodeDisk blk (LedgerState blk)
+     , EncodeDisk blk (ChainDepState (BlockProtocol blk))
      )
   => BlockComponent blk b
   -> ExtLedgerState blk
@@ -133,16 +166,19 @@ foldBlocksWithState
      , MonadReader (DbStreamerApp blk) m
      , HasHeader blk
      , HasAnnTip blk
+     , EncodeDisk blk (AnnTip blk)
+     , EncodeDisk blk (LedgerState blk)
+     , EncodeDisk blk (ChainDepState (BlockProtocol blk))
      )
   => BlockComponent blk b
   -> ExtLedgerState blk
   -- ^ Initial ledger state
   -> (ExtLedgerState blk -> BlockWithInfo b -> m (ExtLedgerState blk))
   -- ^ Function to process each block with current ledger state
-  -> ConduitT a c m (ExtLedgerState blk)
-foldBlocksWithState blockComponent initState action = do
-  let withOriginAnnTip = headerStateTip (headerState initState)
-  sourceBlocks blockComponent withOriginAnnTip .| foldMC action initState
+  -> ConduitT a Void m (ExtLedgerState blk)
+foldBlocksWithState blockComponent initState action =
+  sourceBlocksWithState blockComponent initState (\s b -> (,()) <$> action s b)
+    `fuseUpstream` sinkNull
 
 -- revalidatePrintBlock
 --   :: ExtLedgerState (CardanoBlock StandardCrypto)
@@ -438,7 +474,7 @@ runApp Opts{..} = do
     withRegistry $ \registry -> do
       let appConf =
             AppConfig
-              { appConfDbDir = oChainDir
+              { appConfChainDir = oChainDir
               , appConfFilePath = oConfigFilePath
               , appConfReadDiskSnapshot =
                   DiskSnapshot <$> oReadSnapShotSlotNumber <*> pure oSnapShotSuffix

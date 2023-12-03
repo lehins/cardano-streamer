@@ -11,30 +11,41 @@
 module Cardano.Streamer.ProtocolInfo where
 
 import qualified Cardano.Api as Api
-import Cardano.Chain.Update (ApplicationName (..), SoftwareVersion (..))
-import Cardano.Ledger.BaseTypes (SlotNo (..), natVersion)
+import RIO.FilePath
+import qualified RIO.Text as T
+
+-- import Cardano.Chain.Update (ApplicationName (..), SoftwareVersion (..))
+import Cardano.Ledger.BaseTypes (SlotNo (..))
 import Cardano.Streamer.Common
 import Codec.Serialise (Serialise (decode))
 import Control.Monad.Trans.Except
 import Ouroboros.Consensus.Block (BlockProtocol, ConvertRawHash, GetPrevHash)
 import Ouroboros.Consensus.Block.NestedContent (NestedCtxt)
-import Ouroboros.Consensus.Byron.Node
+
+-- import Ouroboros.Consensus.Byron.Node
 import Ouroboros.Consensus.Cardano.Block
-import Ouroboros.Consensus.Cardano.Node (
-  -- ProtocolTransitionParamsShelleyBased (..),
-  protocolInfoCardano,
- )
+
+-- import Ouroboros.Consensus.Cardano.Node (
+--   ProtocolTransitionParamsShelleyBased (..),
+--   protocolInfoCardano,
+--  )
 import Ouroboros.Consensus.Config (configCodec, configSecurityParam, configStorage)
 import qualified Ouroboros.Consensus.Fragment.InFuture as InFuture
 import Ouroboros.Consensus.HeaderValidation (AnnTip)
-import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState, decodeExtLedgerState)
-import Ouroboros.Consensus.Mempool (mkOverrides, noOverridesMeasure)
+import Ouroboros.Consensus.Ledger.Extended (
+  ExtLedgerState,
+  decodeExtLedgerState,
+  encodeExtLedgerState,
+ )
+
+-- import Ouroboros.Consensus.Mempool (mkOverrides, noOverridesMeasure)
 import qualified Ouroboros.Consensus.Node as Node
 import qualified Ouroboros.Consensus.Node.InitStorage as Node
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import Ouroboros.Consensus.Protocol.Abstract (ChainDepState)
-import Ouroboros.Consensus.Shelley.Node.Praos
-import Ouroboros.Consensus.Shelley.Node.TPraos
+
+-- import Ouroboros.Consensus.Shelley.Node.Praos
+-- import Ouroboros.Consensus.Shelley.Node.TPraos
 import qualified Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import Ouroboros.Consensus.Storage.ChainDB.Impl.Args (fromChainDbArgs)
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
@@ -43,11 +54,16 @@ import Ouroboros.Consensus.Storage.LedgerDB.DiskPolicy (
   SnapshotInterval (DefaultSnapshotInterval),
   defaultDiskPolicy,
  )
-import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..), readSnapshot)
+import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (
+  DiskSnapshot (..),
+  readSnapshot,
+  snapshotToFileName,
+  writeSnapshot,
+ )
 import Ouroboros.Consensus.Storage.Serialisation (
   DecodeDisk (decodeDisk),
   DecodeDiskDep,
-  EncodeDisk,
+  EncodeDisk (encodeDisk),
   HasBinaryBlockInfo,
   ReconstructNestedCtxt,
  )
@@ -133,6 +149,28 @@ withImmutableDb iDbArgs action = do
   logDebug "Closed an immutable database"
   pure res
 
+writeLedgerState
+  :: ( MonadIO m
+     , MonadReader (DbStreamerApp blk) m
+     , EncodeDisk blk (LedgerState blk)
+     , EncodeDisk blk (ChainDepState (BlockProtocol blk))
+     , EncodeDisk blk (AnnTip blk)
+     )
+  => DiskSnapshot
+  -> ExtLedgerState blk
+  -> m ()
+writeLedgerState diskSnapshot ledgerState = do
+  ledgerDbFS <- ChainDB.cdbHasFSLgrDB . dsAppChainDbArgs <$> ask
+  ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
+  chainDir <- dsAppChainDir <$> ask
+  let
+    extLedgerStateEncoder =
+      encodeExtLedgerState (encodeDisk ccfg) (encodeDisk ccfg) (encodeDisk ccfg)
+    snapshotFileName =
+      T.pack $ chainDir </> "ledger" </> snapshotToFileName diskSnapshot
+  liftIO $ writeSnapshot ledgerDbFS extLedgerStateEncoder diskSnapshot ledgerState
+  logInfo $ "Written DiskSnapshot to: " <> display snapshotFileName
+
 readInitLedgerState
   :: ( DecodeDisk blk (LedgerState blk)
      , DecodeDisk blk (ChainDepState (BlockProtocol blk))
@@ -176,7 +214,7 @@ runDbStreamerApp
 runDbStreamerApp action = do
   appConf <- ask
   protocolInfo <- readProtocolInfoCardano (appConfFilePath appConf)
-  dbArgs <- mkDbArgs (appConfDbDir appConf) protocolInfo
+  dbArgs <- mkDbArgs (appConfChainDir appConf) protocolInfo
   let (iDbArgs, _, _, _) = fromChainDbArgs dbArgs
   withImmutableDb iDbArgs $ \iDb ->
     let app =
@@ -184,10 +222,12 @@ runDbStreamerApp action = do
             { dsAppLogFunc = appConfLogFunc appConf
             , dsAppRegistry = appConfRegistry appConf
             , dsAppProtocolInfo = protocolInfo
+            , dsAppChainDir = appConfChainDir appConf
             , dsAppChainDbArgs = dbArgs
             , dsAppIDb = iDb
             , dsAppOutDir = Nothing
-            , dsStopSlotNo = SlotNo <$> appConfStopSlotNumber appConf
+            , dsAppStopSlotNo = SlotNo <$> appConfStopSlotNumber appConf
+            , dbAppWriteDiskSnapshots = appConfWriteDiskSnapshots appConf
             , dsValidationMode = appConfValidationMode appConf
             }
      in runRIO app (getInitLedgerState (appConfReadDiskSnapshot appConf) >>= action)

@@ -94,12 +94,14 @@ data DbStreamerApp blk = DbStreamerApp
   { dsAppLogFunc :: !LogFunc
   , dsAppRegistry :: !(ResourceRegistry IO)
   , dsAppProtocolInfo :: !(ProtocolInfo blk)
+  , dsAppChainDir :: !FilePath
   , dsAppChainDbArgs :: !(ChainDB.ChainDbArgs Identity IO blk)
   , dsAppIDb :: !(ImmutableDB.ImmutableDB IO blk)
   , dsAppOutDir :: !(Maybe FilePath)
   -- ^ Output directory where to write files
-  , dsStopSlotNo :: !(Maybe SlotNo)
+  , dsAppStopSlotNo :: !(Maybe SlotNo)
   -- ^ Last slot number to execute
+  , dbAppWriteDiskSnapshots :: ![DiskSnapshot]
   , dsValidationMode :: !ValidationMode
   }
 
@@ -116,7 +118,7 @@ instance HasResourceRegistry (DbStreamerApp blk) where
   registryL = lens dsAppRegistry $ \app registry -> app{dsAppRegistry = registry}
 
 data AppConfig = AppConfig
-  { appConfDbDir :: !FilePath
+  { appConfChainDir :: !FilePath
   -- ^ Database directory
   , appConfFilePath :: !FilePath
   -- ^ Config file path
