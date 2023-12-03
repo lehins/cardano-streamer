@@ -16,3 +16,11 @@ In order to get working with Cardano a few C dependencies need to be installed f
 $ cabal update
 $ cabal install
 ```
+
+#### `Linux`
+
+```shell
+$ sudo apt install pkg-config libsodium-dev
+$ ./scripts/install-blst.sh
+$ ./scripts/install-secp256k1.sh
+```
