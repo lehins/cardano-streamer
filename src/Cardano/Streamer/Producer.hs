@@ -476,8 +476,8 @@ replayWithBenchmarking
       (ExtLedgerState (CardanoBlock StandardCrypto))
 replayWithBenchmarking initLedgerState = do
   withBenchmarking $ \benchRunTick benchRunBlock ->
-    sourceBlocksWithState GetBlock initLedgerState $
-      advanceBlockGranular benchRunTick benchRunBlock
+    sourceBlocksWithState GetBlock initLedgerState $ \ls ->
+      advanceBlockGranular (benchRunTick ls) benchRunBlock ls
 
 runApp :: Opts -> IO ()
 runApp Opts{..} = do

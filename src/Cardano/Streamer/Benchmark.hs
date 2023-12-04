@@ -5,19 +5,19 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Cardano.Streamer.Benchmark where
 
 import Cardano.Ledger.Crypto
 import Cardano.Streamer.Common
-import Cardano.Streamer.LedgerState (tickedExtLedgerStateEpochNo)
+import Cardano.Streamer.LedgerState (extLedgerStateEpochNo, tickedExtLedgerStateEpochNo)
 import Cardano.Streamer.Time
 import Conduit
 import Criterion.Measurement (getCPUTime, getCycles, getTime, initializeTime)
 import Data.Fixed
 import Ouroboros.Consensus.Block
 import Ouroboros.Consensus.Cardano.Block
-import Ouroboros.Consensus.HardFork.Combinator.State.Types
 import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState)
 import Ouroboros.Consensus.Ticked (Ticked)
 import qualified RIO.Text as T
@@ -104,21 +104,42 @@ measureAction_ :: MonadIO m => m a -> m Measure
 measureAction_ action = snd <$> measureAction action
 
 withBenchmarking
-  :: (Crypto c, MonadIO mc, MonadIO m)
-  => ( (Ticked (ExtLedgerState (CardanoBlock c)) -> SlotNo -> m TickStat)
+  :: forall c m mc p a b
+   . (Crypto c, MonadIO mc, MonadIO m)
+  => ( ( ExtLedgerState (CardanoBlock c)
+         -> Ticked (ExtLedgerState (CardanoBlock c))
+         -> SlotNo
+         -> m TickStat
+       )
        -> (p -> m a -> TickStat -> m (a, Stat))
        -> mc b
      )
   -> mc b
 withBenchmarking f = do
   let
-    benchRunTick tickedLedgerState slotNo = do
+    benchRunTick
+      :: ExtLedgerState (CardanoBlock c)
+      -> Ticked (ExtLedgerState (CardanoBlock c))
+      -> SlotNo
+      -> m TickStat
+    benchRunTick prevLedgerState tickedLedgerState slotNo = do
       measure <- measureAction_ (pure tickedLedgerState)
-      pure $! case tickedExtLedgerStateEpochNo tickedLedgerState of
-        (TransitionKnown epochNo, _) ->
-          trace ("Crossing Epoch No: " <> T.pack (show epochNo)) $
-            TickStat slotNo (Just epochNo) measure
-        _ -> TickStat slotNo Nothing measure
+      let prevEpochNo = extLedgerStateEpochNo prevLedgerState
+          (ti, newEpochNo) = tickedExtLedgerStateEpochNo tickedLedgerState
+      pure $!
+        if prevEpochNo /= newEpochNo
+          then
+            trace
+              ( "Crossing from Epoch No: "
+                  <> T.pack (show prevEpochNo)
+                  <> " to Epoch No: "
+                  <> T.pack (show newEpochNo)
+                  <> " while Transition information tells us: "
+                  <> T.pack (show ti)
+                  <> "\n"
+              )
+              $ TickStat slotNo (Just newEpochNo) measure
+          else TickStat slotNo Nothing measure
     benchRunBlock _ getExtLedgerState tickStat = do
       (extLedgerState, measure) <- measureAction getExtLedgerState
       let !blockStat = BlockStat 0 0 measure
