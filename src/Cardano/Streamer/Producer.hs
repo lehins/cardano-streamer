@@ -240,7 +240,6 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
             <> maybe mempty (\s -> "/" <> display s) mStopSlotNo
             <> "] - Elapsed "
             <> display (T.pack (showTime Nothing False elapsedTime))
-  when (unSlotNo slotNo `mod` 1000 == 0) logStickyStatus
   app <- ask
   let ledgerCfg = ExtLedgerCfg . pInfoConfig $ dsAppProtocolInfo app
       lrTick = applyChainTickLedgerResult ledgerCfg slotNo prevLedger
@@ -250,20 +249,23 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
           logStickyStatus
           logError $ "Received an exception: " <> displayShow exc
           reportValidationError exc slotNo block prevLedger
-  flip withException reportException $ do
-    a <- inspectTickState lrTickResult slotNo
-    let applyBlockGranular =
-          case dsAppValidationMode app of
-            FullValidation -> do
-              case runExcept (applyBlockLedgerResult ledgerCfg block lrTickResult) of
-                Right lrBlock -> pure $ lrResult lrBlock
-                Left errorMessage -> do
-                  logStickyStatus
-                  reportValidationError errorMessage slotNo block prevLedger
-            ReValidation ->
-              pure $ lrResult $ reapplyBlockLedgerResult ledgerCfg block (lrResult lrTick)
-            _ -> error "NoValidation is not yet implemeted"
-    inspectBlockState lrTickResult applyBlockGranular a
+  (extLedgerState, b) <-
+    flip withException reportException $ do
+      a <- inspectTickState lrTickResult slotNo
+      let applyBlockGranular =
+            case dsAppValidationMode app of
+              FullValidation -> do
+                case runExcept (applyBlockLedgerResult ledgerCfg block lrTickResult) of
+                  Right lrBlock -> pure $ lrResult lrBlock
+                  Left errorMessage -> do
+                    logStickyStatus
+                    reportValidationError errorMessage slotNo block prevLedger
+              ReValidation ->
+                pure $ lrResult $ reapplyBlockLedgerResult ledgerCfg block (lrResult lrTick)
+              _ -> error "NoValidation is not yet implemeted"
+      inspectBlockState lrTickResult applyBlockGranular a
+  when (unSlotNo slotNo `mod` 200 == 0) logStickyStatus
+  extLedgerState `seq` pure (extLedgerState, b)
 
 reportValidationError
   :: (MonadReader (DbStreamerApp blk) m, MonadIO m, Show a, Crypto c)
