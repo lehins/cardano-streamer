@@ -11,9 +11,10 @@
 module Cardano.Streamer.ProtocolInfo where
 
 import qualified Cardano.Api as Api
-import RIO.FilePath
+import Cardano.Streamer.Benchmark
 import qualified RIO.Text as T
 import RIO.Time
+
 -- import Cardano.Chain.Update (ApplicationName (..), SoftwareVersion (..))
 import Cardano.Ledger.BaseTypes (SlotNo (..))
 import Cardano.Streamer.Common
@@ -57,7 +58,6 @@ import Ouroboros.Consensus.Storage.LedgerDB.DiskPolicy (
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (
   DiskSnapshot (..),
   readSnapshot,
-  snapshotToFileName,
   writeSnapshot,
  )
 import Ouroboros.Consensus.Storage.Serialisation (
@@ -162,14 +162,12 @@ writeLedgerState
 writeLedgerState diskSnapshot ledgerState = do
   ledgerDbFS <- ChainDB.cdbHasFSLgrDB . dsAppChainDbArgs <$> ask
   ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
-  chainDir <- dsAppChainDir <$> ask
   let
     extLedgerStateEncoder =
       encodeExtLedgerState (encodeDisk ccfg) (encodeDisk ccfg) (encodeDisk ccfg)
-    snapshotFileName =
-      T.pack $ chainDir </> "ledger" </> snapshotToFileName diskSnapshot
   liftIO $ writeSnapshot ledgerDbFS extLedgerStateEncoder diskSnapshot ledgerState
-  logInfo $ "Written DiskSnapshot to: " <> display snapshotFileName
+  snapshotFilePath <- getDiskSnapshotFilePath diskSnapshot
+  logInfo $ "Written DiskSnapshot to: " <> display (T.pack snapshotFilePath)
 
 readInitLedgerState
   :: ( DecodeDisk blk (LedgerState blk)
@@ -180,18 +178,19 @@ readInitLedgerState
   => DiskSnapshot
   -> RIO (DbStreamerApp blk) (ExtLedgerState blk)
 readInitLedgerState diskSnapshot = do
-  logInfo $ "Reading initial ledger state: " <> displayShow diskSnapshot
+  snapshotFilePath <- getDiskSnapshotFilePath diskSnapshot
+  logInfo $ "Reading initial ledger state: " <> display (T.pack snapshotFilePath)
   ledgerDbFS <- ChainDB.cdbHasFSLgrDB . dsAppChainDbArgs <$> ask
   ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
   let
     extLedgerStateDecoder =
       decodeExtLedgerState (decodeDisk ccfg) (decodeDisk ccfg) (decodeDisk ccfg)
-  ledgerState <-
-    liftIO $
-      throwExceptT $
-        readSnapshot ledgerDbFS extLedgerStateDecoder decode diskSnapshot
-  let time = 0 :: Int
-  logInfo $ "Done reading the ledger state in " <> displayShow time
+  (ledgerState, measure) <-
+    measureAction $
+      liftIO $
+        throwExceptT $
+          readSnapshot ledgerDbFS extLedgerStateDecoder decode diskSnapshot
+  logInfo $ "Done reading the ledger state in: " <> display measure
   pure ledgerState
 
 getInitLedgerState

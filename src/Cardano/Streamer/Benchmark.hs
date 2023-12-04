@@ -184,9 +184,11 @@ displayMeasure mDepth Measure{..} =
     , "] CPUTime:["
     , displayDoubleMeasure measureCPUTime
     , "] Cycles:["
-    , display . T.pack $ printf "%20d]" measureCycles
+    , display . T.pack $ showMeasureCycles measureCycles
+    , "]"
     ]
   where
+    showMeasureCycles = if isJust mDepth then printf "%20d" else show
     displayDoubleMeasure =
       display . T.pack . showTime mDepth True . diffTimeToMicro . doubleToDiffTime
 

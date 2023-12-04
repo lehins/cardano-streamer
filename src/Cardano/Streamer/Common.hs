@@ -22,6 +22,7 @@ module Cardano.Streamer.Common (
   HasResourceRegistry (..),
   parseStakingCredential,
   getElapsedTime,
+  getDiskSnapshotFilePath,
   RIO,
   runRIO,
   module X,
@@ -41,9 +42,11 @@ import Control.Tracer (Tracer (..))
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import qualified Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
-import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
+import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..), snapshotToFileName)
 import Ouroboros.Consensus.Util.ResourceRegistry (ResourceRegistry)
 import RIO as X hiding (RIO, runRIO)
+import RIO.FilePath
+import qualified RIO.Text as T
 import RIO.Time
 
 type RIO env = ReaderT env IO
@@ -53,6 +56,9 @@ runRIO env = liftIO . flip runReaderT env
 
 deriving instance Display SlotNo
 deriving instance Display EpochNo
+
+instance Display DiskSnapshot where
+  textDisplay = T.pack . snapshotToFileName
 
 class HasResourceRegistry env where
   registryL :: Lens' env (ResourceRegistry IO)
@@ -200,3 +206,8 @@ getElapsedTime = do
   startTime <- dsAppStartTime <$> ask
   curTime <- getCurrentTime
   pure $ diffTimeToSec (diffUTCTime curTime startTime)
+
+getDiskSnapshotFilePath :: MonadReader (DbStreamerApp blk) m => DiskSnapshot -> m FilePath
+getDiskSnapshotFilePath diskSnapshot = do
+  chainDir <- dsAppChainDir <$> ask
+  pure $ chainDir </> "ledger" </> snapshotToFileName diskSnapshot
