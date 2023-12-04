@@ -103,27 +103,6 @@ measureAction action = do
 measureAction_ :: MonadIO m => m a -> m Measure
 measureAction_ action = snd <$> measureAction action
 
--- startTime <- liftIO getTime
--- startCPUTime <- liftIO getCPUTime
--- startCycles <- liftIO getCycles
--- !_ <- action
--- endTime <- liftIO getTime
--- endCPUTime <- liftIO getCPUTime
--- endCycles <- liftIO getCycles
--- pure $!
---   Measure
---     { measureTime = endTime - startTime
---     , measureCPUTime = endCPUTime - startCPUTime
---     , measureCycles = endCycles - startCycles
---     }
-
--- withBenchmarking
---   :: (Crypto c, MonadIO m)
---   => ( (Ticked (ExtLedgerState (CardanoBlock c)) -> SlotNo -> m TickStat)
---        -> (p -> m a -> TickStat -> m (a, Stat))
---        -> m b
---      )
---   -> m b
 withBenchmarking
   :: (Crypto c, MonadIO mc, MonadIO m)
   => ( (Ticked (ExtLedgerState (CardanoBlock c)) -> SlotNo -> m TickStat)
@@ -137,7 +116,8 @@ withBenchmarking f = do
       measure <- measureAction_ (pure tickedLedgerState)
       pure $! case tickedExtLedgerStateEpochNo tickedLedgerState of
         (TransitionKnown epochNo, _) ->
-          TickStat slotNo (Just epochNo) measure
+          trace ("Crossing Epoch No: " <> T.pack (show epochNo)) $
+            TickStat slotNo (Just epochNo) measure
         _ -> TickStat slotNo Nothing measure
     benchRunBlock _ getExtLedgerState tickStat = do
       (extLedgerState, measure) <- measureAction getExtLedgerState
@@ -146,9 +126,6 @@ withBenchmarking f = do
       pure (extLedgerState, stat)
   liftIO initializeTime
   f benchRunTick benchRunBlock
-
--- runWithBench = advanceBlockGranular benchRunTick benchRunBlock
--- sourceBlocksWithState GetBlock initLedgerState runWithBench
 
 data MeasureSummary = MeasureSummary
   { msMean :: !Measure
