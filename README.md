@@ -19,8 +19,10 @@ $ cabal install
 
 #### `Linux`
 
+* Ubuntu
+
 ```shell
-$ sudo apt install pkg-config libsodium-dev
+$ sudo apt install pkg-config autoconf automake libtool libsodium-dev zlib1g-dev
 $ ./scripts/install-blst.sh
 $ ./scripts/install-secp256k1.sh
 ```

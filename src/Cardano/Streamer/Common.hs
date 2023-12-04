@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -20,6 +21,7 @@ module Cardano.Streamer.Common (
   HasImmutableDb (..),
   HasResourceRegistry (..),
   parseStakingCredential,
+  getElapsedTime,
   RIO,
   runRIO,
   module X,
@@ -42,6 +44,7 @@ import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
 import Ouroboros.Consensus.Util.ResourceRegistry (ResourceRegistry)
 import RIO as X hiding (RIO, runRIO)
+import RIO.Time
 
 type RIO env = ReaderT env IO
 
@@ -102,7 +105,8 @@ data DbStreamerApp blk = DbStreamerApp
   , dsAppStopSlotNo :: !(Maybe SlotNo)
   -- ^ Last slot number to execute
   , dbAppWriteDiskSnapshots :: ![DiskSnapshot]
-  , dsValidationMode :: !ValidationMode
+  , dsAppValidationMode :: !ValidationMode
+  , dsAppStartTime :: !UTCTime
   }
 
 class HasImmutableDb env blk | env -> blk where
@@ -190,3 +194,9 @@ parseStakingCredential txt =
       case hashFromBytes bs of
         Nothing -> error $ "Impossible: This should be a valid Hash value: " ++ show bs
         Just h -> h
+
+getElapsedTime :: (MonadReader (DbStreamerApp blk) m, MonadIO m) => m (Time 'Sec)
+getElapsedTime = do
+  startTime <- dsAppStartTime <$> ask
+  curTime <- getCurrentTime
+  pure $ diffTimeToSec (diffUTCTime curTime startTime)

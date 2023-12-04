@@ -83,30 +83,54 @@ data Stat = Stat
   , blockStat :: {-# UNPACK #-} !BlockStat
   }
 
-measureAction_ :: MonadIO m => m a -> m Measure
-measureAction_ action = do
+measureAction :: MonadIO m => m a -> m (a, Measure)
+measureAction action = do
   startTime <- liftIO getTime
   startCPUTime <- liftIO getCPUTime
   startCycles <- liftIO getCycles
-  !_ <- action
+  !res <- action
   endTime <- liftIO getTime
   endCPUTime <- liftIO getCPUTime
   endCycles <- liftIO getCycles
-  pure $!
-    Measure
-      { measureTime = endTime - startTime
-      , measureCPUTime = endCPUTime - startCPUTime
-      , measureCycles = endCycles - startCycles
-      }
+  let !mes =
+        Measure
+          { measureTime = endTime - startTime
+          , measureCPUTime = endCPUTime - startCPUTime
+          , measureCycles = endCycles - startCycles
+          }
+  pure (res, mes)
 
+measureAction_ :: MonadIO m => m a -> m Measure
+measureAction_ action = snd <$> measureAction action
 
+-- startTime <- liftIO getTime
+-- startCPUTime <- liftIO getCPUTime
+-- startCycles <- liftIO getCycles
+-- !_ <- action
+-- endTime <- liftIO getTime
+-- endCPUTime <- liftIO getCPUTime
+-- endCycles <- liftIO getCycles
+-- pure $!
+--   Measure
+--     { measureTime = endTime - startTime
+--     , measureCPUTime = endCPUTime - startCPUTime
+--     , measureCycles = endCycles - startCycles
+--     }
+
+-- withBenchmarking
+--   :: (Crypto c, MonadIO m)
+--   => ( (Ticked (ExtLedgerState (CardanoBlock c)) -> SlotNo -> m TickStat)
+--        -> (p -> m a -> TickStat -> m (a, Stat))
+--        -> m b
+--      )
+--   -> m b
 withBenchmarking
-  :: (Crypto c, MonadIO m1, MonadIO m2, MonadIO m3)
-  => ( (Ticked (ExtLedgerState (CardanoBlock c)) -> SlotNo -> m2 TickStat)
-       -> (p -> a -> TickStat -> m3 Stat)
-       -> m1 b
+  :: (Crypto c, MonadIO mc, MonadIO m)
+  => ( (Ticked (ExtLedgerState (CardanoBlock c)) -> SlotNo -> m TickStat)
+       -> (p -> m a -> TickStat -> m (a, Stat))
+       -> mc b
      )
-  -> m1 b
+  -> mc b
 withBenchmarking f = do
   let
     benchRunTick tickedLedgerState slotNo = do
@@ -115,10 +139,11 @@ withBenchmarking f = do
         (TransitionKnown epochNo, _) ->
           TickStat slotNo (Just epochNo) measure
         _ -> TickStat slotNo Nothing measure
-    benchRunBlock _ extLedgerState tickStat = do
-      measure <- measureAction_ (pure extLedgerState)
-      let blockStat = BlockStat 0 0 measure
-      pure $! Stat tickStat blockStat
+    benchRunBlock _ getExtLedgerState tickStat = do
+      (extLedgerState, measure) <- measureAction getExtLedgerState
+      let !blockStat = BlockStat 0 0 measure
+          !stat = Stat tickStat blockStat
+      pure (extLedgerState, stat)
   liftIO initializeTime
   f benchRunTick benchRunBlock
 
@@ -226,70 +251,3 @@ doubleToDiffTime :: Double -> NominalDiffTime
 doubleToDiffTime d = secondsToNominalDiffTime f
   where
     f = MkFixed $ round (d * fromIntegral (resolution f))
-
--- data Interval
---   = Years Integer
---   | Days Integer
---   | Hours Integer
---   | Minutes Integer
---   | Seconds Integer
---   | MilliSeconds Integer
---   deriving (Show)
-
--- formatDiffTime :: Bool -> NominalDiffTime -> Utf8Builder
--- formatDiffTime isShort nd = go True "" (MilliSeconds <$> divMod (round (nd * 1000)) 1000)
---   where
---     sep
---       | isShort = " "
---       | otherwise = ", "
---     year
---       | isShort = "y"
---       | otherwise = "year"
---     day
---       | isShort = "d"
---       | otherwise = "day"
---     hour
---       | isShort = "h"
---       | otherwise = "hour"
---     minute
---       | isShort = "m"
---       | otherwise = "minute"
---     second
---       | isShort = "s"
---       | otherwise = "second"
---     millisecond
---       | isShort = "ms"
---       | otherwise = "millisecond"
---     go isAccEmpty acc =
---       \case
---         (_, Years y)
---           | y > 0 ->
---               showTime isAccEmpty y year sep acc
---         (n, Days d)
---           | d > 0 || n > 0 ->
---               go False (showTime isAccEmpty d day sep acc) (0, Years n)
---         (n, Hours h)
---           | h > 0 || n > 0 ->
---               go False (showTime isAccEmpty h hour sep acc) (Days <$> divMod n 365)
---         (n, Minutes m)
---           | m > 0 || n > 0 ->
---               go False (showTime isAccEmpty m minute sep acc) (Hours <$> divMod n 24)
---         (n, Seconds s) ->
---           go False (showTime isAccEmpty s second sep acc) (Minutes <$> divMod n 60)
---         (0, MilliSeconds s) -> showTime isAccEmpty s millisecond "" acc
---         (n, MilliSeconds s) ->
---           go False (showTime isAccEmpty s millisecond "" acc) (Seconds <$> divMod n 60)
---         _ -> acc
---     showTime _ 0 _ _ acc = acc
---     showTime isAccEmpty t tTxt sp acc =
---       display t
---         <> (if isShort then "" else " ")
---         <> tTxt
---         <> ( if isShort || t == 1
---               then ""
---               else "s"
---            )
---         <> ( if isAccEmpty
---               then acc
---               else sp <> acc
---            )

@@ -22,12 +22,12 @@ import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
 import Cardano.Streamer.LedgerState (detectNewRewards, extLedgerStateEpochNo, writeNewEpochState)
 import Cardano.Streamer.ProtocolInfo
+import Cardano.Streamer.Time
 import Conduit
 import Control.Monad.Trans.Except
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Merge.Strict as Map
 import qualified Data.Map.Strict as Map
-import Data.Monoid
 import Ouroboros.Consensus.Block
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.HeaderValidation (
@@ -39,12 +39,9 @@ import Ouroboros.Consensus.HeaderValidation (
 import Ouroboros.Consensus.Ledger.Abstract (
   applyBlockLedgerResult,
   reapplyBlockLedgerResult,
-  tickThenApplyLedgerResult,
-  tickThenReapplyLedgerResult,
  )
 import Ouroboros.Consensus.Ledger.Basics (LedgerResult (lrResult), applyChainTickLedgerResult)
 import Ouroboros.Consensus.Ledger.Extended (ExtLedgerCfg (..), ExtLedgerState (headerState), Ticked)
-import Ouroboros.Consensus.Ledger.SupportsProtocol (LedgerSupportsProtocol)
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import Ouroboros.Consensus.Protocol.Abstract (ChainDepState)
 import Ouroboros.Consensus.Storage.ChainDB as ChainDB
@@ -90,8 +87,11 @@ sourceBlocks blockComponent withOriginAnnTip = do
           ImmutableDB.IteratorExhausted -> pure ()
           ImmutableDB.IteratorResult (slotNo, _, _, _)
             | slotNo > stopSlotNo ->
-                logInfo $ "Stopped right before processing slot number " <> display slotNo <>
-                " because hard stop was specified at slot number " <> display stopSlotNo
+                logInfo $
+                  "Stopped right before processing slot number "
+                    <> display slotNo
+                    <> " because hard stop was requested at slot number "
+                    <> display stopSlotNo
           ImmutableDB.IteratorResult (slotNo, blockSize, headerSize, comp) ->
             yield (BlockWithInfo slotNo blockSize headerSize comp) >> loop
 
@@ -209,9 +209,13 @@ advanceBlockGranular
        -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) a
      )
   -> ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto))
-       -> ExtLedgerState (CardanoBlock StandardCrypto)
+       -> RIO
+            (DbStreamerApp (CardanoBlock StandardCrypto))
+            (ExtLedgerState (CardanoBlock StandardCrypto))
        -> a
-       -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) b
+       -> RIO
+            (DbStreamerApp (CardanoBlock StandardCrypto))
+            (ExtLedgerState (CardanoBlock StandardCrypto), b)
      )
   -> ExtLedgerState (CardanoBlock StandardCrypto)
   -> BlockWithInfo (CardanoBlock StandardCrypto)
@@ -223,7 +227,9 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
       block = biBlockComponent bwi
       era = getCardanoEra block
       epochNo = extLedgerStateEpochNo prevLedger
-      logStickyStatus =
+      logStickyStatus = do
+        mStopSlotNo <- dsAppStopSlotNo <$> ask
+        elapsedTime <- getElapsedTime
         logSticky $
           "["
             <> displayShow era
@@ -231,8 +237,10 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
             <> display (unEpochNo epochNo)
             <> " - "
             <> displayShow slotNo
-            <> "]"
-  when (unSlotNo slotNo `mod` 100 == 0) logStickyStatus
+            <> maybe mempty (\s -> "/" <> display s) mStopSlotNo
+            <> "] - Elapsed "
+            <> display (T.pack (showTime Nothing False elapsedTime))
+  when (unSlotNo slotNo `mod` 1000 == 0) logStickyStatus
   app <- ask
   let ledgerCfg = ExtLedgerCfg . pInfoConfig $ dsAppProtocolInfo app
       lrTick = applyChainTickLedgerResult ledgerCfg slotNo prevLedger
@@ -244,20 +252,18 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
           reportValidationError exc slotNo block prevLedger
   flip withException reportException $ do
     a <- inspectTickState lrTickResult slotNo
-    case dsValidationMode app of
-      FullValidation -> do
-        case runExcept (applyBlockLedgerResult ledgerCfg block lrTickResult) of
-          Right lrBlock -> do
-            let lrBlockResult = lrResult lrBlock
-            b <- inspectBlockState lrTickResult lrBlockResult a
-            pure (lrBlockResult, b)
-          Left errorMessage -> do
-            logStickyStatus
-            reportValidationError errorMessage slotNo block prevLedger
-      ReValidation -> do
-        let lrBlock = reapplyBlockLedgerResult ledgerCfg block (lrResult lrTick)
-        b <- inspectBlockState (lrResult lrTick) (lrResult lrBlock) a
-        pure (lrResult lrBlock, b)
+    let applyBlockGranular =
+          case dsAppValidationMode app of
+            FullValidation -> do
+              case runExcept (applyBlockLedgerResult ledgerCfg block lrTickResult) of
+                Right lrBlock -> pure $ lrResult lrBlock
+                Left errorMessage -> do
+                  logStickyStatus
+                  reportValidationError errorMessage slotNo block prevLedger
+            ReValidation ->
+              pure $ lrResult $ reapplyBlockLedgerResult ledgerCfg block (lrResult lrTick)
+            _ -> error "NoValidation is not yet implemeted"
+    inspectBlockState lrTickResult applyBlockGranular a
 
 reportValidationError
   :: (MonadReader (DbStreamerApp blk) m, MonadIO m, Show a, Crypto c)
@@ -300,7 +306,11 @@ advanceBlock
 advanceBlock inspectBlockState !prevLedger !block =
   advanceBlockGranular
     (\_ _ -> pure ())
-    (\ts s _ -> inspectBlockState ts s)
+    ( \ts getExtLedgerState _ -> do
+        s <- getExtLedgerState
+        res <- inspectBlockState ts s
+        pure (s, res)
+    )
     prevLedger
     block
 
@@ -311,7 +321,7 @@ advanceBlock_
       (DbStreamerApp (CardanoBlock StandardCrypto))
       (ExtLedgerState (CardanoBlock StandardCrypto))
 advanceBlock_ !prevLedger !block =
-  fst <$> advanceBlockGranular (\_ _ -> pure ()) (\_ _ _ -> pure ()) prevLedger block
+  fst <$> advanceBlock (\_ _ -> pure ()) prevLedger block
 
 data RewardsState c = RewardsState
   { curEpoch :: !EpochNo

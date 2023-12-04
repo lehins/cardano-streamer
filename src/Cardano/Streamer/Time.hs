@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 
@@ -17,7 +18,26 @@ import Text.Printf
 diffTimeToMicro :: NominalDiffTime -> Time 'Micro
 diffTimeToMicro ndt =
   case nominalDiffTimeToSeconds ndt of
-    MkFixed pico -> addTime (Time 0 Nothing) (pico `div` 1000000)
+    MkFixed pico -> addTime (Time 0 Nothing) (pico `div` 1_000_000)
+
+diffTimeToMilli :: NominalDiffTime -> Time 'Milli
+diffTimeToMilli ndt =
+  case nominalDiffTimeToSeconds ndt of
+    MkFixed pico -> addTime (Time 0 Nothing) (pico `div` 1_000_000_000)
+
+diffTimeToSec :: NominalDiffTime -> Time 'Sec
+diffTimeToSec ndt =
+  case nominalDiffTimeToSeconds ndt of
+    MkFixed pico -> addTime (Time 0 Nothing) (pico `div` 1_000_000_000_000)
+
+-- diffTimeTo :: forall t . Interval t => NominalDiffTime -> Time t
+-- diffTimeTo ndt =
+--   case nominalDiffTimeToSeconds ndt of
+--     MkFixed pico -> addTime (Time 0 Nothing) (pico `div` 1_000_000)
+
+-- totalMaxInterval :: forall proxy t . Interval t => proxy (SubTime t) -> Int
+-- totalMaxInterval px =
+--   maxInterval px * totalMaxInterval (Proxy :: Proxy t)
 
 data T
   = Year
@@ -47,7 +67,7 @@ instance Interval t => Show (Time t) where
   show = showTime Nothing True
 
 class Interval t => BoundedInterval (t :: T) where
-  maxInterval :: proxy t -> Integer
+  maxInterval :: proxy t -> Int
 
 maxIntervalDigits :: BoundedInterval t => proxy t -> Int
 maxIntervalDigits px = length $ show (maxInterval px - 1)
@@ -69,6 +89,7 @@ class Interval (t :: T) where
   timeNameShort :: proxy t -> String
 
   showTime :: Maybe Int -> Bool -> Time t -> String
+
   -- default showTime
   --   :: (BoundedInterval t, Interval (SubTime t))
   --   => Maybe Int
@@ -78,8 +99,9 @@ class Interval (t :: T) where
   -- showTime = defaultShowTime
 
   addTime :: Time t -> Integer -> Time t
-  -- default addTime :: (BoundedInterval t, Interval (SubTime t)) => Time t -> Integer -> Time t
-  -- addTime = defaultAddTime
+
+-- default addTime :: (BoundedInterval t, Interval (SubTime t)) => Time t -> Integer -> Time t
+-- addTime = defaultAddTime
 
 maxTimeDepth :: Time t -> Int
 maxTimeDepth (Time _ Nothing) = 1
@@ -104,12 +126,14 @@ defaultShowTime mDepth isConcise t@(Time i mSub) =
   where
     v =
       printf ("%0" ++ show (maxIntervalDigits t) ++ "d") i
-        <> if isConcise then timeNameShort t else " " <> timeName t
+        <> if isConcise
+          then timeNameShort t
+          else " " <> timeName t <> if i `mod` 10 == 1 then "" else "s"
     sep = if isConcise then " " else ", "
 
 defaultAddTime :: (BoundedInterval t, Interval (SubTime t)) => Time t -> Integer -> Time t
 defaultAddTime t@(Time p maybeNext) i =
-  case (toInteger p + i) `quotRem` maxInterval t of
+  case (toInteger p + i) `quotRem` toInteger (maxInterval t) of
     (0, r) -> Time (fromInteger r) maybeNext
     (q, r) -> Time (fromInteger r) $ Just (addTime (fromMaybe (Time 0 Nothing) maybeNext) q)
 

@@ -13,7 +13,7 @@ module Cardano.Streamer.ProtocolInfo where
 import qualified Cardano.Api as Api
 import RIO.FilePath
 import qualified RIO.Text as T
-
+import RIO.Time
 -- import Cardano.Chain.Update (ApplicationName (..), SoftwareVersion (..))
 import Cardano.Ledger.BaseTypes (SlotNo (..))
 import Cardano.Streamer.Common
@@ -216,7 +216,8 @@ runDbStreamerApp action = do
   protocolInfo <- readProtocolInfoCardano (appConfFilePath appConf)
   dbArgs <- mkDbArgs (appConfChainDir appConf) protocolInfo
   let (iDbArgs, _, _, _) = fromChainDbArgs dbArgs
-  withImmutableDb iDbArgs $ \iDb ->
+  withImmutableDb iDbArgs $ \iDb -> do
+    startTime <- getCurrentTime
     let app =
           DbStreamerApp
             { dsAppLogFunc = appConfLogFunc appConf
@@ -228,9 +229,10 @@ runDbStreamerApp action = do
             , dsAppOutDir = Nothing
             , dsAppStopSlotNo = SlotNo <$> appConfStopSlotNumber appConf
             , dbAppWriteDiskSnapshots = appConfWriteDiskSnapshots appConf
-            , dsValidationMode = appConfValidationMode appConf
+            , dsAppValidationMode = appConfValidationMode appConf
+            , dsAppStartTime = startTime
             }
-     in runRIO app (getInitLedgerState (appConfReadDiskSnapshot appConf) >>= action)
+    runRIO app (getInitLedgerState (appConfReadDiskSnapshot appConf) >>= action)
 
 -----------
 
