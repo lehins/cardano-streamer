@@ -125,20 +125,10 @@ withBenchmarking f = do
     benchRunTick prevLedgerState tickedLedgerState slotNo = do
       measure <- measureAction_ (pure tickedLedgerState)
       let prevEpochNo = extLedgerStateEpochNo prevLedgerState
-          (ti, newEpochNo) = tickedExtLedgerStateEpochNo tickedLedgerState
+          (_ti, newEpochNo) = tickedExtLedgerStateEpochNo tickedLedgerState
       pure $!
         if prevEpochNo /= newEpochNo
-          then
-            trace
-              ( "Crossing from Epoch No: "
-                  <> T.pack (show prevEpochNo)
-                  <> " to Epoch No: "
-                  <> T.pack (show newEpochNo)
-                  <> " while Transition information tells us: "
-                  <> T.pack (show ti)
-                  <> "\n"
-              )
-              $ TickStat slotNo (Just newEpochNo) measure
+          then TickStat slotNo (Just newEpochNo) measure
           else TickStat slotNo Nothing measure
     benchRunBlock _ getExtLedgerState tickStat = do
       (extLedgerState, measure) <- measureAction getExtLedgerState
@@ -212,10 +202,10 @@ instance Display StatsReport where
      in mconcat
           [ title "Ticks"
           , displayMeasureSummary maxDepth n srTick
-          , title "Blocks"
-          , displayMeasureSummary maxDepth n srBlock
           , title "Epochs"
           , displayMeasureSummary maxDepth n srEpoch
+          , title "Blocks"
+          , displayMeasureSummary maxDepth n srBlock
           ]
 
 calcStatsReport :: Monad m => ConduitT Stat Void m StatsReport
