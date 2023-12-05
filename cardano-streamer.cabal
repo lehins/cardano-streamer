@@ -92,7 +92,7 @@ executable cstreamer
                       -O2
                       -threaded
                       -rtsopts
-                      -with-rtsopts=-N
+                      -with-rtsopts=-N1
   build-depends:      base
                     , cardano-streamer
                     , ouroboros-consensus
