@@ -76,13 +76,13 @@ sourceBlocks blockComponent withOriginAnnTip = do
   mStopSlotNo <- dsAppStopSlotNo <$> ask
   case mStopSlotNo of
     Nothing ->
-      fix $ \loop ->
+      flip fix 1 $ \loop n ->
         liftIO (ImmutableDB.iteratorNext itr) >>= \case
           ImmutableDB.IteratorExhausted -> pure ()
           ImmutableDB.IteratorResult (slotNo, blockSize, headerSize, comp) ->
-            yield (BlockWithInfo slotNo blockSize headerSize comp) >> loop
+            yield (BlockWithInfo slotNo blockSize headerSize n comp) >> loop (n + 1)
     Just stopSlotNo ->
-      fix $ \loop ->
+      flip fix 1 $ \loop n ->
         liftIO (ImmutableDB.iteratorNext itr) >>= \case
           ImmutableDB.IteratorExhausted -> pure ()
           ImmutableDB.IteratorResult (slotNo, _, _, _)
@@ -93,7 +93,7 @@ sourceBlocks blockComponent withOriginAnnTip = do
                     <> " because hard stop was requested at slot number "
                     <> display stopSlotNo
           ImmutableDB.IteratorResult (slotNo, blockSize, headerSize, comp) ->
-            yield (BlockWithInfo slotNo blockSize headerSize comp) >> loop
+            yield (BlockWithInfo slotNo blockSize headerSize n comp) >> loop (n + 1)
 
 sourceBlocksWithAccState
   :: ( MonadIO m
@@ -238,7 +238,7 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
             <> " - "
             <> displayShow slotNo
             <> maybe mempty (\s -> "/" <> display s) mStopSlotNo
-            <> "] - Elapsed "
+            <> "] Blocks: " <> display (biBlocksProcessed bwi) <> " - Elapsed "
             <> display (T.pack (showTime Nothing False elapsedTime))
   app <- ask
   let ledgerCfg = ExtLedgerCfg . pInfoConfig $ dsAppProtocolInfo app
@@ -264,7 +264,7 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
                 pure $ lrResult $ reapplyBlockLedgerResult ledgerCfg block (lrResult lrTick)
               _ -> error "NoValidation is not yet implemeted"
       inspectBlockState lrTickResult applyBlockGranular a
-  when (unSlotNo slotNo `mod` 200 == 0) logStickyStatus
+  when (biBlocksProcessed bwi `mod` 200 == 0) logStickyStatus
   extLedgerState `seq` pure (extLedgerState, b)
 
 reportValidationError
@@ -417,7 +417,7 @@ accumNewRewards creds prevExtLedgerState rs bwi = do
 --     <$> runConduit
 --       ( void (sourceBlocksWithState GetBlock initLedgerState revalidatePrintBlock)
 --           .| foldMapMC (liftIO . evaluate . foldMap' (fromIntegral . tpOutsCount) . bpTxsSummary)
---       )
+  --       )
 
 -- revalidateWriteNewEpochState
 --   :: ExtLedgerState (CardanoBlock StandardCrypto)

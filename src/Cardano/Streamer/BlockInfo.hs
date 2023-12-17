@@ -49,6 +49,7 @@ data BlockWithInfo b = BlockWithInfo
   { biSlotNo :: !SlotNo
   , biBlockSize :: !Word32
   , biBlockHeaderSize :: !Word16
+  , biBlocksProcessed :: !Word64
   , biBlockComponent :: !b
   }
 
