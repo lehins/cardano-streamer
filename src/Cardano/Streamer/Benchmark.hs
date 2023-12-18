@@ -69,7 +69,8 @@ instance Monoid Measure where
 data BlockStat = BlockStat
   { blockNumTxs :: !Int
   , blockNumScripts :: !Int
-  , blockMeasure :: {-# UNPACK #-} !Measure
+  , blockApplyMeasure :: {-# UNPACK #-} !Measure
+  , blockDecodeMeasure :: {-# UNPACK #-} !Measure
   }
 
 data TickStat = TickStat
@@ -104,19 +105,21 @@ measureAction_ :: MonadIO m => m a -> m Measure
 measureAction_ action = snd <$> measureAction action
 
 withBenchmarking
-  :: forall c m mc p a b
+  :: forall c m mc a b
    . (Crypto c, MonadIO mc, MonadIO m)
-  => ( ( ExtLedgerState (CardanoBlock c)
-         -> Ticked (ExtLedgerState (CardanoBlock c))
-         -> SlotNo
-         -> m TickStat
-       )
-       -> (p -> m a -> TickStat -> m (a, Stat))
+  => ( (m (CardanoBlock c) -> m (CardanoBlock c, Measure))
+       -> ( ExtLedgerState (CardanoBlock c)
+            -> Ticked (ExtLedgerState (CardanoBlock c))
+            -> SlotNo
+            -> m TickStat
+          )
+       -> (m a -> (Measure, TickStat) -> m (a, Stat))
        -> mc b
      )
   -> mc b
 withBenchmarking f = do
   let
+    benchDecode decodeBlock = measureAction decodeBlock
     benchRunTick
       :: ExtLedgerState (CardanoBlock c)
       -> Ticked (ExtLedgerState (CardanoBlock c))
@@ -130,13 +133,13 @@ withBenchmarking f = do
         if prevEpochNo /= newEpochNo
           then TickStat slotNo (Just newEpochNo) measure
           else TickStat slotNo Nothing measure
-    benchRunBlock _ getExtLedgerState tickStat = do
-      (extLedgerState, measure) <- measureAction getExtLedgerState
-      let !blockStat = BlockStat 0 0 measure
+    benchRunBlock getExtLedgerState (decodeMeasure, tickStat) = do
+      (extLedgerState, applyMeasure) <- measureAction getExtLedgerState
+      let !blockStat = BlockStat 0 0 applyMeasure decodeMeasure
           !stat = Stat tickStat blockStat
       pure (extLedgerState, stat)
   liftIO initializeTime
-  f benchRunTick benchRunBlock
+  f benchDecode benchRunTick benchRunBlock
 
 data MeasureSummary = MeasureSummary
   { msMean :: !Measure
@@ -184,6 +187,7 @@ data StatsReport = StatsReport
   { srTick :: !MeasureSummary
   , srEpoch :: !MeasureSummary
   , srBlock :: !MeasureSummary
+  , srBlockDecode :: !MeasureSummary
   }
 
 maxDepthStatsReport :: StatsReport -> Int
@@ -192,6 +196,7 @@ maxDepthStatsReport StatsReport{..} =
     [ maxDepthMeasureSummary srTick
     , maxDepthMeasureSummary srEpoch
     , maxDepthMeasureSummary srBlock
+    , maxDepthMeasureSummary srBlockDecode
     ]
 
 instance Display StatsReport where
@@ -204,31 +209,39 @@ instance Display StatsReport where
           , displayMeasureSummary maxDepth n srTick
           , title "Epochs"
           , displayMeasureSummary maxDepth n srEpoch
-          , title "Blocks"
+          , title "Apply Blocks"
           , displayMeasureSummary maxDepth n srBlock
+          , title "Decode Blocks"
+          , displayMeasureSummary maxDepth n srBlockDecode
           ]
 
 calcStatsReport :: Monad m => ConduitT Stat Void m StatsReport
 calcStatsReport = do
-  (tick, epoch, block) <- foldlC addMeasure ((mempty, 0), (mempty, 0), (mempty, 0))
+  (tick, epoch, (applyBlock, decodeBlock, blockCount)) <-
+    foldlC addMeasure ((mempty, 0), (mempty, 0), (mempty, mempty, 0))
   pure $
     StatsReport
       { srTick = uncurry mkMeasureSummary tick
       , srEpoch = uncurry mkMeasureSummary epoch
-      , srBlock = uncurry mkMeasureSummary block
+      , srBlock = mkMeasureSummary applyBlock blockCount
+      , srBlockDecode = mkMeasureSummary decodeBlock blockCount
       }
   where
     addMeasure
-      ( tick@(!tickSum, !tickCount)
-        , epoch@(!epochSum, !epochCount)
-        , (!blockSum, !blockCount)
+      ( !tick@(!tickSum, !tickCount)
+        , !epoch@(!epochSum, !epochCount)
+        , !(!blockSum, !blockDecodeSum, !blockCount)
         )
       stat =
         let !(!tick', !epoch') =
               case tickEpochNo (tickStat stat) of
                 Nothing -> ((tickSum <> tickMeasure (tickStat stat), tickCount + 1), epoch)
                 Just _ -> (tick, (epochSum <> tickMeasure (tickStat stat), epochCount + 1))
-            !block' = (blockSum <> blockMeasure (blockStat stat), blockCount + 1)
+            !block' =
+              ( blockSum <> blockApplyMeasure (blockStat stat)
+              , blockDecodeSum <> blockDecodeMeasure (blockStat stat)
+              , blockCount + 1
+              )
          in (tick', epoch', block')
     mkMeasureSummary mSum mCount =
       MeasureSummary

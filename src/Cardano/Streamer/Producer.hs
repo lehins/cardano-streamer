@@ -513,9 +513,9 @@ replayWithBenchmarking
       (RIO (DbStreamerApp (CardanoBlock StandardCrypto)))
       (ExtLedgerState (CardanoBlock StandardCrypto))
 replayWithBenchmarking initLedgerState = do
-  withBenchmarking $ \benchRunTick benchRunBlock ->
-    sourceBlocksWithState GetBlock initLedgerState $ \ls ->
-      advanceBlockGranular (benchRunTick ls) benchRunBlock ls
+  withBenchmarking $ \decodeBlock benchRunTick benchRunBlock ->
+    sourceBlocksWithState GetRawBlock initLedgerState $ \ls ->
+      advanceRawBlockGranular (const decodeBlock) (benchRunTick ls) (const benchRunBlock) ls
 
 runApp :: Opts -> IO ()
 runApp Opts{..} = do
