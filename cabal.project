@@ -12,9 +12,9 @@ repository cardano-haskell-packages
 
 index-state:
   -- Bump this if you need newer packages from Hackage
-  , hackage.haskell.org 2023-12-01T11:57:23Z
+  , hackage.haskell.org 2023-12-20T12:41:18Z
   -- Bump this if you need newer packages from CHaP
-  , cardano-haskell-packages 2023-12-01T11:57:23Z
+  , cardano-haskell-packages 2023-12-15T13:03:00Z
 
 packages: .
 
@@ -56,33 +56,28 @@ test-show-details: direct
 
 allow-newer:
   *:aeson
--- source-repository-package
---   type: git
---   location: git@github.com:input-output-hk/cardano-api.git
---   tag: 43c2190dd1523fcfe39c5d8a45e8754ef80d28d9
---   subdir:
---     cardano-api
+
+
+source-repository-package
+  type: git
+  location: git@github.com:IntersectMBO/cardano-api.git
+  tag: eaad67667cd011664e5eeb8dc7c0f759f904c059
+  subdir:
+    cardano-api
+
+source-repository-package
+  type: git
+  location: git@github.com:zliu41/ouroboros-consensus.git
+  tag: ffdc49fa891e180101ecfd8567ac844fe6c581eb
+  subdir:
+    ouroboros-consensus-cardano
+    ouroboros-consensus-diffusion
+    ouroboros-consensus-protocol
+    ouroboros-consensus
 
 -- source-repository-package
 --   type: git
---   location: git@github.com:input-output-hk/ouroboros-consensus.git
---   tag: e3917f684e8b60e7bfc453d6d8114b800bdf167d
---   subdir:
---     ouroboros-consensus-cardano
---     ouroboros-consensus-diffusion
---     ouroboros-consensus-protocol
---     ouroboros-consensus
-
--- source-repository-package
---   type: git
---   location: https://github.com/input-output-hk/cardano-node
---   tag: f9e8e256d3d5dd68752ebca369330a8b76e01de7
---   subdir:
---     cardano-api
-
--- source-repository-package
---   type: git
---   location: https://github.com/input-output-hk/cardano-base
+--   location: https://github.com/IntersectMBO/cardano-base
 --   tag: ae6bafce6b06296bb88c7bc5c0376d9836060fbf
 --   --sha256: sha256-1hO02IrT/xUo9UDjm/v90laczuHlPS4UaZzpA5096Ig=
 --   subdir:
@@ -90,10 +85,29 @@ allow-newer:
 --     cardano-crypto-praos
 --     cardano-crypto-tests
 
--- source-repository-package
---   type: git
---   location: https://github.com/input-output-hk/cardano-ledger
---   tag: 0281b477ad93f46122a254c0d756c03542f3ed07
---   --sha256: sha256-XzwvmcmNcDbj9kla6Aha6SaMpidqJKTyezz+cY/kEYQ=
---   subdir:
---     libs/cardano-protocol-tpraos
+source-repository-package
+  type: git
+  location: https://github.com/IntersectMBO/cardano-ledger
+  tag: 0765d327dfb01e1a8dfc34b7619294cd504474e7
+  subdir:
+    eras/allegra/impl
+    eras/alonzo/impl
+    eras/alonzo/test-suite
+    eras/babbage/impl
+    eras/babbage/test-suite
+    eras/byron/ledger/impl
+    eras/conway/impl
+    eras/conway/test-suite
+    eras/mary/impl
+    eras/shelley/impl
+    eras/shelley/test-suite
+    eras/shelley-ma/test-suite
+    libs/cardano-data
+    libs/cardano-ledger-api
+    libs/cardano-ledger-binary
+    libs/cardano-ledger-core
+    libs/cardano-ledger-pretty
+    libs/small-steps
+    libs/small-steps-test
+    libs/vector-map
+  --sha256: sha256-QpQmInlpagyDL2jUIAr6KWWED11oYwZ64vY2Hsm7viQ=
