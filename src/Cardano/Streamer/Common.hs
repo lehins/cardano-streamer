@@ -23,6 +23,7 @@ module Cardano.Streamer.Common (
   parseStakingCredential,
   getElapsedTime,
   getDiskSnapshotFilePath,
+  writeReport,
   RIO,
   runRIO,
   module X,
@@ -211,3 +212,14 @@ getDiskSnapshotFilePath :: MonadReader (DbStreamerApp blk) m => DiskSnapshot -> 
 getDiskSnapshotFilePath diskSnapshot = do
   chainDir <- dsAppChainDir <$> ask
   pure $ chainDir </> "ledger" </> snapshotToFileName diskSnapshot
+
+writeReport :: (MonadReader (DbStreamerApp blk) m, MonadIO m, Display p) => p -> m ()
+writeReport report = do
+  let reportBuilder = display report
+  logInfo reportBuilder
+  mOutDir <- dsAppOutDir <$> ask
+  forM_ mOutDir $ \outDir -> do
+    curTime <- getCurrentTime
+    let time = formatTime defaultTimeLocale "%F %H-%M-%S" curTime
+        fileName = "bench-report" <> time <> ".txt"
+    writeFileUtf8 (outDir </> fileName) $ utf8BuilderToText reportBuilder

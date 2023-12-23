@@ -302,7 +302,7 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
                 pure $ lrResult $ reapplyBlockLedgerResult ledgerCfg block (lrResult lrTick)
               _ -> error "NoValidation is not yet implemeted"
       inspectBlockState lrTickResult applyBlockGranular a
-  when (biBlocksProcessed bwi `mod` 200 == 0) logStickyStatus
+  when (biBlocksProcessed bwi `mod` 20 == 0) logStickyStatus
   extLedgerState `seq` pure (extLedgerState, b)
 
 reportValidationError
@@ -502,8 +502,9 @@ computeRewards creds initLedgerState = do
 replayCalcStatsReport
   :: ExtLedgerState (CardanoBlock StandardCrypto)
   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) StatsReport
-replayCalcStatsReport initLedgerState =
-  runConduit $ void (replayWithBenchmarking initLedgerState) .| calcStatsReport
+replayCalcStatsReport initLedgerState = do
+  report <- runConduit $ void (replayWithBenchmarking initLedgerState) .| calcStatsReport
+  report <$ writeReport report
 
 replayWithBenchmarking
   :: ExtLedgerState (CardanoBlock StandardCrypto)
@@ -540,9 +541,7 @@ runApp Opts{..} = do
         runRIO (app{dsAppOutDir = oOutDir}) $
           case oCommand of
             Replay -> void $ replayChain initLedger
-            Benchmark -> do
-              report <- replayCalcStatsReport initLedger
-              logInfo $ display report
+            Benchmark -> void $ replayCalcStatsReport initLedger
             ComputeRewards creds ->
               void $ computeRewards (Set.fromList $ NE.toList creds) initLedger
 
