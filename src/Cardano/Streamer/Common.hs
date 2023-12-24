@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -25,6 +26,9 @@ module Cardano.Streamer.Common (
   getDiskSnapshotFilePath,
   writeReport,
   writeCsv,
+  NamedCsv(..),
+  writeRecord,
+  writeNamedCsv,
   RIO,
   runRIO,
   module X,
@@ -40,6 +44,7 @@ import Cardano.Ledger.Hashes
 import Cardano.Ledger.Keys
 import Cardano.Streamer.Time
 import Control.Monad.Trans.Except
+import Data.Csv as Csv
 import Control.Tracer (Tracer (..))
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import qualified Ouroboros.Consensus.Storage.ChainDB as ChainDB
@@ -223,11 +228,23 @@ writeReport name report = do
   forM_ mOutDir $ \outDir -> do
     curTime <- getCurrentTime
     let time = formatTime defaultTimeLocale "%F-%H-%M-%S" curTime
-        fileName = name <> "-report" <> time <> ".txt"
+        fileName = name <> "-benchmark-" <> time <> ".txt"
         filePath = outDir </> fileName
     writeFileUtf8 filePath $ utf8BuilderToText reportBuilder
     logInfo $ "Written " <> fromString name <> " report to: " <> fromString filePath
 
+writeRecord :: (MonadReader (DbStreamerApp blk) m, MonadIO m, ToRecord a) => String -> [a] -> m ()
+writeRecord name = writeCsv name . encode
+
+data NamedCsv where
+  NamedCsv :: ToNamedRecord a => Csv.Header -> [a] -> NamedCsv
+
+writeNamedCsv
+  :: (MonadReader (DbStreamerApp blk) m, MonadIO m)
+  => String
+  -> NamedCsv
+  -> m ()
+writeNamedCsv name (NamedCsv csvHeader csv) = writeCsv name (encodeByName csvHeader csv)
 
 writeCsv :: (MonadReader (DbStreamerApp blk) m, MonadIO m) => String -> LByteString -> m ()
 writeCsv name csv = do
@@ -235,7 +252,7 @@ writeCsv name csv = do
   forM_ mOutDir $ \outDir -> do
     curTime <- getCurrentTime
     let time = formatTime defaultTimeLocale "%F-%H-%M-%S" curTime
-        fileName = name <> "-report" <> time <> ".csv"
+        fileName = name <> "-data-" <> time <> ".csv"
         filePath = outDir </> fileName
     writeFileBinary filePath $ toStrictBytes csv
     logInfo $ "Written CSV file " <> fromString name <> " report to: " <> fromString filePath

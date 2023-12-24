@@ -22,7 +22,7 @@ module Cardano.Streamer.LedgerState (
   EpochBlockStats (..),
   BlockStats (..),
   EpochStats (..),
-  encodeCsvEpochStats,
+  epochStatsToNamedCsv,
   toEpochStats,
   pattern TickedLedgerStateAllegra,
   pattern TickedLedgerStateAlonzo,
@@ -49,6 +49,7 @@ import Cardano.Ledger.Shelley.LedgerState hiding (LedgerState)
 import Cardano.Ledger.UMap as UM
 import Cardano.Ledger.Val
 import Cardano.Streamer.BlockInfo
+import Cardano.Streamer.Common
 import Cardano.Streamer.Ledger
 import qualified Data.ByteString.Lazy as BSL
 import Data.Csv
@@ -63,7 +64,6 @@ import Ouroboros.Consensus.Protocol.TPraos
 -- import Ouroboros.Consensus.Shelley.Ledger (shelleyLedgerState)
 import Ouroboros.Consensus.Shelley.Ledger.Block
 import Ouroboros.Consensus.Shelley.Ledger.Ledger
-import RIO
 import qualified RIO.Map as Map
 
 import Data.SOP.BasicFunctors
@@ -316,9 +316,9 @@ instance ToNamedRecord EpochBlockStats where
                | lang <- nonNativeLanguages
                ]
 
-encodeCsvEpochStats :: EpochStats -> BSL.ByteString
-encodeCsvEpochStats =
-  encodeByName blockStatsHeader . map (uncurry EpochBlockStats) . Map.toList . unEpochStats
+epochStatsToNamedCsv :: EpochStats -> NamedCsv
+epochStatsToNamedCsv =
+  NamedCsv blockStatsHeader . map (uncurry EpochBlockStats) . Map.toList . unEpochStats
   where
     blockStatsHeader =
       header $ ["EpochNo", "BlocksSize"] ++ map (toField . languageToText) nonNativeLanguages
