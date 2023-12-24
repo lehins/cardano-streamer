@@ -269,21 +269,24 @@ applyBlockTxs
   -> CardanoBlock c
   -> a
 applyBlockTxs applyByronTxs applyNonByronTxs =
-  applyBlock applyByronBlock applyNonByronBlock applyNonByronBlock
-  where
-    applyByronBlock byronBlock =
-      case byronBlockRaw byronBlock of
-        B.ABOBBlock abBlock ->
-          let B.ATxPayload atxs = B.bodyTxPayload (B.blockBody abBlock)
-           in applyByronTxs atxs
-        B.ABOBBoundary _abBlock -> applyByronTxs []
-    applyNonByronBlock
-      :: forall era p
-       . EraApp era c
-      => CardanoEra
-      -> ShelleyBlock (p (EraCrypto era)) era
-      -> a
-    applyNonByronBlock _ = applyNonByronTxs . toList . fromTxSeq . bbody . shelleyBlockRaw
+  applyBlock
+    (applyByronTxs . getByronTxs)
+    (\_ -> applyNonByronTxs . getShelleyOnwardsTxs)
+    (\_ -> applyNonByronTxs . getShelleyOnwardsTxs)
+
+getByronTxs :: ByronBlock -> [B.ATxAux ByteString]
+getByronTxs byronBlock =
+  case byronBlockRaw byronBlock of
+    B.ABOBBlock abBlock ->
+      let B.ATxPayload atxs = B.bodyTxPayload (B.blockBody abBlock)
+       in atxs
+    B.ABOBBoundary _abBlock -> []
+
+getShelleyOnwardsTxs
+  :: EraApp era c
+  => ShelleyBlock (p (EraCrypto era)) era
+  -> [Tx era]
+getShelleyOnwardsTxs = toList . fromTxSeq . bbody . shelleyBlockRaw
 
 getSlotNo :: Crypto c => CardanoBlock c -> SlotNo
 getSlotNo =
@@ -325,15 +328,27 @@ filterBlockWithdrawals creds =
         )
         txs
 
-blockLanguageStats :: forall c. Crypto c => CardanoBlock c -> Map Language LanguageStats
-blockLanguageStats =
-  applyBlockTxs (const Map.empty) (foldl' accStats Map.empty)
+accLanguageStats
+  :: forall c
+   . Crypto c
+  => (forall era. EraApp era c => Tx era -> Map (ScriptHash c) PlutusWithLanguage)
+  -> CardanoBlock c
+  -> Map Language LanguageStats
+accLanguageStats fTx =
+  applyBlockTxs (const Map.empty) (calcStatsForPlutusWithLanguage fTx)
+
+calcStatsForPlutusWithLanguage
+  :: (Foldable f, Foldable t)
+  => (a -> f PlutusWithLanguage)
+  -> t a
+  -> Map Language LanguageStats
+calcStatsForPlutusWithLanguage f = foldl' accStats Map.empty
   where
-    accStats :: EraApp era c => Map Language LanguageStats -> Tx era -> Map Language LanguageStats
-    accStats acc tx =
-      Map.unionWith (<>) acc $
-        Map.map (foldMap' toLanguageStats) $
-          plutusScriptsPerLanguage (plutusScriptTxWits (tx ^. witsTxL))
+    accStats acc =
+      Map.unionWith (<>) acc . Map.map (foldMap' toLanguageStats) . plutusScriptsPerLanguage . f
+
+blockLanguageStats :: forall c. Crypto c => CardanoBlock c -> Map Language LanguageStats
+blockLanguageStats = accLanguageStats $ \tx -> plutusScriptTxWits (tx ^. witsTxL)
 
 toLanguageStats :: PlutusBinary -> LanguageStats
 toLanguageStats (PlutusBinary binaryBlutus) =

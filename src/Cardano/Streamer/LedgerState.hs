@@ -13,7 +13,10 @@ module Cardano.Streamer.LedgerState (
   encodeNewEpochState,
   applyNonByronNewEpochState,
   applyNewEpochState,
+  applyTickedNewEpochStateWithBlock,
+  applyTickedNewEpochStateWithTxs,
   tickedExtLedgerStateEpochNo,
+  blockLanguageRefScriptsStats,
   lookupRewards,
   lookupTotalRewards,
   writeNewEpochState,
@@ -35,6 +38,7 @@ module Cardano.Streamer.LedgerState (
 
 import Cardano.Chain.Block as Byron (ChainValidationState (cvsUpdateState))
 import qualified Cardano.Chain.Slotting as Byron (EpochNumber (getEpochNumber))
+import qualified Cardano.Chain.UTxO as B
 import qualified Cardano.Chain.Update.Validation.Interface as Byron (State (currentEpoch))
 import Cardano.Ledger.BaseTypes (EpochNo (..))
 import Cardano.Ledger.Binary.Plain as Plain (Encoding, serialize, toCBOR)
@@ -295,10 +299,6 @@ detectNewRewards creds prevEpochNo prevRewards epochWithdrawals extLedgerState =
         pure (curRewards, epochReceivedRewards)
       pure (curEpochNo, res)
 
--- data StateInfo a = StateInfo
---   { siEpochNo :: !EpochNo
---   , si
-
 data EpochBlockStats = EpochBlockStats
   { ebsEpochNo :: !EpochNo
   , ebsBlockStats :: !BlockStats
@@ -313,7 +313,11 @@ instance ToNamedRecord EpochBlockStats where
           ]
             ++ [ toField (languageToText lang)
                 .= (lsTotalSize <$> Map.lookup lang bsLanguageStatsWits)
-               | lang <- nonNativeLanguages
+               | lang <- [PlutusV1 .. PlutusV2]
+               ]
+            ++ [ toField ("RefScript-" <> languageToText lang)
+                .= (lsTotalSize <$> Map.lookup lang esLanguageStatsRefScripts)
+               | lang <- [PlutusV2]
                ]
 
 epochStatsToNamedCsv :: EpochStats -> NamedCsv
@@ -326,7 +330,7 @@ epochStatsToNamedCsv =
 data BlockStats = BlockStats
   { bsBlocksSize :: !Int
   , bsLanguageStatsWits :: !(Map Language LanguageStats)
-  -- , esLanguageStatsRefScripts :: !(Map Language LanguageStats)
+  , esLanguageStatsRefScripts :: !(Map Language LanguageStats)
   }
 
 instance Semigroup BlockStats where
@@ -335,6 +339,8 @@ instance Semigroup BlockStats where
       { bsBlocksSize = bsBlocksSize es1 + bsBlocksSize es2
       , bsLanguageStatsWits =
           Map.unionWith (<>) (bsLanguageStatsWits es1) (bsLanguageStatsWits es2)
+      , esLanguageStatsRefScripts =
+          Map.unionWith (<>) (esLanguageStatsRefScripts es1) (esLanguageStatsRefScripts es2)
       }
 
 instance Monoid BlockStats where
@@ -342,6 +348,7 @@ instance Monoid BlockStats where
     BlockStats
       { bsBlocksSize = 0
       , bsLanguageStatsWits = mempty
+      , esLanguageStatsRefScripts = mempty
       }
 
 newtype EpochStats = EpochStats
@@ -376,3 +383,64 @@ instance Display BlockStats where
         [ "  Witnesses for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
         | (lang, langStats) <- Map.toList bsLanguageStatsWits
         ]
+      <> mconcat
+        [ "  Reference scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
+        | (lang, langStats) <- Map.toList esLanguageStatsRefScripts
+        ]
+
+applyTickedNewEpochStateWithBlock
+  :: Crypto c
+  => (TransitionInfo -> ChainValidationState -> ByronBlock -> a)
+  -> ( forall era
+        . EraApp era c
+       => TransitionInfo
+       -> NewEpochState era
+       -> ShelleyBlock (TPraos (EraCrypto era)) era
+       -> a
+     )
+  -> ( forall era
+        . EraApp era c
+       => TransitionInfo
+       -> NewEpochState era
+       -> ShelleyBlock (Praos (EraCrypto era)) era
+       -> a
+     )
+  -> Ticked (ExtLedgerState (CardanoBlock c))
+  -> CardanoBlock c
+  -> a
+applyTickedNewEpochStateWithBlock fByron fTPraos fPraos tickedExtLedgerState block =
+  case (tickedLedgerState tickedExtLedgerState, block) of
+    (TickedLedgerStateByron ti ls, BlockByron blk) -> fByron ti (tickedByronLedgerState ls) blk
+    (TickedLedgerStateShelley ti ls, BlockShelley blk) -> fTPraos ti (tickedShelleyLedgerState ls) blk
+    (TickedLedgerStateAllegra ti ls, BlockAllegra blk) -> fTPraos ti (tickedShelleyLedgerState ls) blk
+    (TickedLedgerStateMary ti ls, BlockMary blk) -> fTPraos ti (tickedShelleyLedgerState ls) blk
+    (TickedLedgerStateAlonzo ti ls, BlockAlonzo blk) -> fTPraos ti (tickedShelleyLedgerState ls) blk
+    (TickedLedgerStateBabbage ti ls, BlockBabbage blk) -> fPraos ti (tickedShelleyLedgerState ls) blk
+    (TickedLedgerStateConway ti ls, BlockConway blk) -> fPraos ti (tickedShelleyLedgerState ls) blk
+    _ -> error "Impossible combination of a ledegr state and a block"
+
+applyTickedNewEpochStateWithTxs
+  :: Crypto c
+  => (ChainValidationState -> [B.ATxAux ByteString] -> a)
+  -> (forall era. EraApp era c => NewEpochState era -> [Tx era] -> a)
+  -> Ticked (ExtLedgerState (CardanoBlock c))
+  -> CardanoBlock c
+  -> a
+applyTickedNewEpochStateWithTxs fByron fShelleyOnwards =
+  applyTickedNewEpochStateWithBlock
+    (\_ti cvs -> fByron cvs . getByronTxs)
+    (\_ti nes -> fShelleyOnwards nes . getShelleyOnwardsTxs)
+    (\_ti nes -> fShelleyOnwards nes . getShelleyOnwardsTxs)
+
+blockLanguageRefScriptsStats
+  :: Crypto c
+  => Ticked (ExtLedgerState (CardanoBlock c))
+  -> CardanoBlock c
+  -> Map Language LanguageStats
+blockLanguageRefScriptsStats =
+  applyTickedNewEpochStateWithTxs
+    (\_ _ -> Map.empty)
+    ( \nes ->
+        let utxo = nes ^. nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL
+         in calcStatsForPlutusWithLanguage (\tx -> plutusRefScriptTxBody utxo (tx ^. bodyTxL))
+    )

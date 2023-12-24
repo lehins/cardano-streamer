@@ -381,6 +381,8 @@ advanceBlockStats els blk =
                 BlockStats
                   { bsBlocksSize = fromIntegral (biBlockSize blk)
                   , bsLanguageStatsWits = blockLanguageStats (biBlockComponent blk)
+                  , esLanguageStatsRefScripts =
+                      blockLanguageRefScriptsStats tls (biBlockComponent blk)
                   }
             }
     )
