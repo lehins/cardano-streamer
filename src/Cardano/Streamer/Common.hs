@@ -24,6 +24,7 @@ module Cardano.Streamer.Common (
   getElapsedTime,
   getDiskSnapshotFilePath,
   writeReport,
+  writeCsv,
   RIO,
   runRIO,
   module X,
@@ -223,4 +224,18 @@ writeReport name report = do
     curTime <- getCurrentTime
     let time = formatTime defaultTimeLocale "%F-%H-%M-%S" curTime
         fileName = name <> "-report" <> time <> ".txt"
-    writeFileUtf8 (outDir </> fileName) $ utf8BuilderToText reportBuilder
+        filePath = outDir </> fileName
+    writeFileUtf8 filePath $ utf8BuilderToText reportBuilder
+    logInfo $ "Written " <> fromString name <> " report to: " <> fromString filePath
+
+
+writeCsv :: (MonadReader (DbStreamerApp blk) m, MonadIO m) => String -> LByteString -> m ()
+writeCsv name csv = do
+  mOutDir <- dsAppOutDir <$> ask
+  forM_ mOutDir $ \outDir -> do
+    curTime <- getCurrentTime
+    let time = formatTime defaultTimeLocale "%F-%H-%M-%S" curTime
+        fileName = name <> "-report" <> time <> ".csv"
+        filePath = outDir </> fileName
+    writeFileBinary filePath $ toStrictBytes csv
+    logInfo $ "Written CSV file " <> fromString name <> " report to: " <> fromString filePath

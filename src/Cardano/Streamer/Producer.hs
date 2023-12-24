@@ -370,14 +370,18 @@ advanceBlockStats
   -> BlockWithInfo (CardanoBlock StandardCrypto)
   -> RIO
       (DbStreamerApp (CardanoBlock StandardCrypto))
-      (ExtLedgerState (CardanoBlock StandardCrypto), BlockStats)
+      (ExtLedgerState (CardanoBlock StandardCrypto), EpochBlockStats)
 advanceBlockStats els blk =
   advanceBlock
     ( \tls _ ->
         pure $
-          BlockStats
-            { bsEpochNo = snd (tickedExtLedgerStateEpochNo tls)
-            , bsLanguageStatsWits = blockLanguageStats (biBlockComponent blk)
+          EpochBlockStats
+            { ebsEpochNo = snd (tickedExtLedgerStateEpochNo tls)
+            , ebsBlockStats =
+                BlockStats
+                  { bsBlocksSize = fromIntegral (biBlockSize blk)
+                  , bsLanguageStatsWits = blockLanguageStats (biBlockComponent blk)
+                  }
             }
     )
     els
@@ -391,10 +395,11 @@ calcEpochStats
       (RIO (DbStreamerApp (CardanoBlock StandardCrypto)))
       EpochStats
 calcEpochStats initLedgerState = do
-  report <-
+  epochStats <-
     void (sourceBlocksWithState GetBlock initLedgerState advanceBlockStats)
       .| foldMapC toEpochStats
-  report <$ writeReport "Epoch" report
+  writeCsv "EpochStats" $ encodeCsvEpochStats epochStats
+  epochStats <$ writeReport "EpochStats" epochStats
 
 data RewardsState c = RewardsState
   { curEpoch :: !EpochNo
@@ -532,10 +537,10 @@ computeRewards creds initLedgerState = do
 
     emptyRewardsState = RewardsState 0 mempty mempty
 
-replayBanchmarkReport
+replayBenchmarkReport
   :: ExtLedgerState (CardanoBlock StandardCrypto)
   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) StatsReport
-replayBanchmarkReport initLedgerState = do
+replayBenchmarkReport initLedgerState = do
   report <- runConduit $ void (replayWithBenchmarking initLedgerState) .| calcStatsReport
   report <$ writeReport "Benchmark" report
 
@@ -574,7 +579,7 @@ runApp Opts{..} = do
         runRIO (app{dsAppOutDir = oOutDir}) $
           case oCommand of
             Replay -> void $ replayChain initLedger
-            Benchmark -> void $ replayBanchmarkReport initLedger
+            Benchmark -> void $ replayBenchmarkReport initLedger
             Stats -> void $ runConduit $ calcEpochStats initLedger
             ComputeRewards creds ->
               void $ computeRewards (Set.fromList $ NE.toList creds) initLedger

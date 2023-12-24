@@ -49,6 +49,7 @@ library
                      , cardano-ledger-shelley
                      , cardano-protocol-tpraos
                      , cardano-slotting
+                     , cassava
                      , conduit
                      , containers
                      , contra-tracer

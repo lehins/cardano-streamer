@@ -19,8 +19,10 @@ module Cardano.Streamer.LedgerState (
   writeNewEpochState,
   extLedgerStateEpochNo,
   detectNewRewards,
+  EpochBlockStats (..),
   BlockStats (..),
   EpochStats (..),
+  encodeCsvEpochStats,
   toEpochStats,
   pattern TickedLedgerStateAllegra,
   pattern TickedLedgerStateAlonzo,
@@ -49,6 +51,7 @@ import Cardano.Ledger.Val
 import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Ledger
 import qualified Data.ByteString.Lazy as BSL
+import Data.Csv
 import qualified Data.Map.Merge.Strict as Map
 import Ouroboros.Consensus.Byron.Ledger.Block
 import Ouroboros.Consensus.Byron.Ledger.Ledger
@@ -296,42 +299,80 @@ detectNewRewards creds prevEpochNo prevRewards epochWithdrawals extLedgerState =
 --   { siEpochNo :: !EpochNo
 --   , si
 
+data EpochBlockStats = EpochBlockStats
+  { ebsEpochNo :: !EpochNo
+  , ebsBlockStats :: !BlockStats
+  }
+
+instance ToNamedRecord EpochBlockStats where
+  toNamedRecord EpochBlockStats{..} =
+    let BlockStats{..} = ebsBlockStats
+     in namedRecord $
+          [ "EpochNo" .= unEpochNo ebsEpochNo
+          , "BlocksSize" .= bsBlocksSize
+          ]
+            ++ [ toField (languageToText lang)
+                .= (lsTotalSize <$> Map.lookup lang bsLanguageStatsWits)
+               | lang <- nonNativeLanguages
+               ]
+
+encodeCsvEpochStats :: EpochStats -> BSL.ByteString
+encodeCsvEpochStats =
+  encodeByName blockStatsHeader . map (uncurry EpochBlockStats) . Map.toList . unEpochStats
+  where
+    blockStatsHeader =
+      header $ ["EpochNo", "BlocksSize"] ++ map (toField . languageToText) nonNativeLanguages
+
 data BlockStats = BlockStats
-  { bsEpochNo :: !EpochNo
+  { bsBlocksSize :: !Int
   , bsLanguageStatsWits :: !(Map Language LanguageStats)
   -- , esLanguageStatsRefScripts :: !(Map Language LanguageStats)
   }
 
+instance Semigroup BlockStats where
+  es1 <> es2 =
+    BlockStats
+      { bsBlocksSize = bsBlocksSize es1 + bsBlocksSize es2
+      , bsLanguageStatsWits =
+          Map.unionWith (<>) (bsLanguageStatsWits es1) (bsLanguageStatsWits es2)
+      }
+
+instance Monoid BlockStats where
+  mempty =
+    BlockStats
+      { bsBlocksSize = 0
+      , bsLanguageStatsWits = mempty
+      }
+
 newtype EpochStats = EpochStats
-  { esLanguageStatsWits :: Map EpochNo (Map Language LanguageStats)
-  -- , esLanguageStatsRefScripts :: !(Map Language LanguageStats)
+  { unEpochStats :: Map EpochNo BlockStats
   }
 
 instance Semigroup EpochStats where
   es1 <> es2 =
     EpochStats
-      { esLanguageStatsWits =
-          Map.unionWith (Map.unionWith (<>)) (esLanguageStatsWits es1) (esLanguageStatsWits es2)
+      { unEpochStats =
+          Map.unionWith (<>) (unEpochStats es1) (unEpochStats es2)
       }
 
 instance Monoid EpochStats where
-  mempty = EpochStats{esLanguageStatsWits = mempty}
+  mempty = EpochStats{unEpochStats = mempty}
 
-toEpochStats :: BlockStats -> EpochStats
-toEpochStats BlockStats{..} = EpochStats $ Map.singleton bsEpochNo bsLanguageStatsWits
+toEpochStats :: EpochBlockStats -> EpochStats
+toEpochStats EpochBlockStats{..} = EpochStats $ Map.singleton ebsEpochNo ebsBlockStats
 
 instance Display EpochStats where
   display EpochStats{..} =
     mconcat
-      [ mconcat
-        [ "== " <> display epochNo <> ": ========\n"
-        , "  Witnesses for " <> displayShow lang <> ":"
-        , "\n      "
-        , display langStat
-        , "\n"
-        -- , "  Witnesses: \n      "
-        -- , display esLanguageStatsRefScripts
-        ]
-      | (epochNo, langsStat) <- Map.toList esLanguageStatsWits
-      , (lang, langStat) <- Map.toList langsStat
+      [ "== " <> display epochNo <> ": ========\n" <> display blockStats
+      | (epochNo, blockStats) <- Map.toList unEpochStats
       ]
+
+instance Display BlockStats where
+  display BlockStats{..} =
+    "Total size of blocks: "
+      <> display bsBlocksSize
+      <> mconcat
+        [ "  Witnesses for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
+        | (lang, langStats) <- Map.toList bsLanguageStatsWits
+        ]
