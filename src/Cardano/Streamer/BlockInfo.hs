@@ -3,7 +3,9 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -22,17 +24,19 @@ import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Crypto
 import Cardano.Ledger.Keys
+import Cardano.Ledger.Plutus.Language
 import Cardano.Ledger.SafeHash
 import Cardano.Ledger.Val
 import Cardano.Protocol.TPraos.BHeader
 import Cardano.Streamer.Common
+import Cardano.Streamer.Ledger
 import Control.Monad.Trans.Fail.String (errorFail)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
+import qualified Data.ByteString.Short as SBS
+import Data.Foldable (foldMap')
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
-
--- import Ouroboros.Consensus.Block
 import Ouroboros.Consensus.Byron.Ledger.Block
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Protocol.Praos (Praos)
@@ -52,6 +56,9 @@ data BlockWithInfo b = BlockWithInfo
   , biBlocksProcessed :: !Word64
   , biBlockComponent :: !b
   }
+
+instance Functor BlockWithInfo where
+  fmap f bwi = bwi{biBlockComponent = f (biBlockComponent bwi)}
 
 data CardanoEra
   = Byron
@@ -111,18 +118,8 @@ getCardanoEra =
 applyBlock
   :: Crypto c
   => (ByronBlock -> a)
-  -> ( forall era
-        . (EraSegWits era, EraCrypto era ~ c)
-       => CardanoEra
-       -> ShelleyBlock (TPraos (EraCrypto era)) era
-       -> a
-     )
-  -> ( forall era
-        . (EraSegWits era, EraCrypto era ~ c)
-       => CardanoEra
-       -> ShelleyBlock (Praos (EraCrypto era)) era
-       -> a
-     )
+  -> (forall era. EraApp era c => CardanoEra -> ShelleyBlock (TPraos (EraCrypto era)) era -> a)
+  -> (forall era. EraApp era c => CardanoEra -> ShelleyBlock (Praos (EraCrypto era)) era -> a)
   -> CardanoBlock c
   -> a
 applyBlock applyBronBlock applyTPraosBlock applyPraosBlock = \case
@@ -268,11 +265,7 @@ applyBlockTxs
   :: forall a c
    . Crypto c
   => ([B.ATxAux ByteString] -> a)
-  -> ( forall era
-        . (EraSegWits era, EraCrypto era ~ c)
-       => [Tx era]
-       -> a
-     )
+  -> (forall era. EraApp era c => [Tx era] -> a)
   -> CardanoBlock c
   -> a
 applyBlockTxs applyByronTxs applyNonByronTxs =
@@ -286,7 +279,7 @@ applyBlockTxs applyByronTxs applyNonByronTxs =
         B.ABOBBoundary _abBlock -> applyByronTxs []
     applyNonByronBlock
       :: forall era p
-       . (EraSegWits era, EraCrypto era ~ c)
+       . EraApp era c
       => CardanoEra
       -> ShelleyBlock (p (EraCrypto era)) era
       -> a
@@ -325,10 +318,65 @@ filterBlockWithdrawals
 filterBlockWithdrawals creds =
   applyBlockTxs (const mempty) $ \txs ->
     Map.unionsWith (<+>) $
-      ( map
-          ( \tx ->
-              let wdrls = Map.mapKeys getRwdCred $ unWithdrawals (tx ^. bodyTxL . withdrawalsTxBodyL)
-               in wdrls `Map.restrictKeys` creds
-          )
-          txs
-      )
+      map
+        ( \tx ->
+            let wdrls = Map.mapKeys getRwdCred $ unWithdrawals (tx ^. bodyTxL . withdrawalsTxBodyL)
+             in wdrls `Map.restrictKeys` creds
+        )
+        txs
+
+blockLanguageStats :: forall c. Crypto c => CardanoBlock c -> Map Language LanguageStats
+blockLanguageStats =
+  applyBlockTxs (const Map.empty) (foldl' accStats Map.empty)
+  where
+    accStats :: EraApp era c => Map Language LanguageStats -> Tx era -> Map Language LanguageStats
+    accStats acc tx =
+      Map.unionWith (<>) acc $
+        Map.map (foldMap' toLanguageStats) $
+          plutusScriptsPerLanguage (plutusScriptTxWits (tx ^. witsTxL))
+
+toLanguageStats :: PlutusBinary -> LanguageStats
+toLanguageStats (PlutusBinary binaryBlutus) =
+  let sz = SBS.length binaryBlutus
+   in LanguageStats
+        { lsTotalCount = 1
+        , lsTotalSize = sz
+        , lsMaxSize = sz
+        , lsMinSize = sz
+        }
+
+data LanguageStats = LanguageStats
+  { lsTotalCount :: !Int
+  , lsTotalSize :: !Int
+  , lsMaxSize :: !Int
+  , lsMinSize :: !Int
+  }
+
+instance Semigroup LanguageStats where
+  ls1 <> ls2 =
+    LanguageStats
+      { lsTotalCount = lsTotalCount ls1 + lsTotalCount ls2
+      , lsTotalSize = lsTotalSize ls1 + lsTotalSize ls2
+      , lsMaxSize = max (lsMaxSize ls1) (lsMaxSize ls2)
+      , lsMinSize = min (lsMinSize ls1) (lsMinSize ls2)
+      }
+
+instance Monoid LanguageStats where
+  mempty =
+    LanguageStats
+      { lsTotalCount = 0
+      , lsTotalSize = 0
+      , lsMaxSize = minBound
+      , lsMinSize = maxBound
+      }
+
+instance Display LanguageStats where
+  display LanguageStats{..} =
+    "Count: "
+      <> display lsTotalCount
+      <> " Size: "
+      <> display lsTotalSize
+      <> " MaxSize: "
+      <> display lsMaxSize
+      <> " MinSize: "
+      <> display lsMinSize

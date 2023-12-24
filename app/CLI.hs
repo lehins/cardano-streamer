@@ -149,11 +149,15 @@ commandParser =
                 (pure Benchmark)
                 ( progDesc $
                     mconcat
-                      [ "Replay the chanin with timing how long processing each step takes and "
+                      [ "Replay the chan with timing of how long processing each step takes and "
                       , "produce simple statistics at the end."
                       ]
                 )
             )
+      )
+    <|> subparser
+      ( metavar "stats"
+          <> command "stats" (info (pure Stats) (progDesc "Calculate various stats"))
       )
     <|> subparser
       ( metavar "rewards"

@@ -6,6 +6,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeFamilies #-}
 
 module Cardano.Streamer.LedgerState (
@@ -18,6 +19,9 @@ module Cardano.Streamer.LedgerState (
   writeNewEpochState,
   extLedgerStateEpochNo,
   detectNewRewards,
+  BlockStats (..),
+  EpochStats (..),
+  toEpochStats,
   pattern TickedLedgerStateAllegra,
   pattern TickedLedgerStateAlonzo,
   pattern TickedLedgerStateBabbage,
@@ -31,17 +35,19 @@ import Cardano.Chain.Block as Byron (ChainValidationState (cvsUpdateState))
 import qualified Cardano.Chain.Slotting as Byron (EpochNumber (getEpochNumber))
 import qualified Cardano.Chain.Update.Validation.Interface as Byron (State (currentEpoch))
 import Cardano.Ledger.BaseTypes (EpochNo (..))
-import Cardano.Ledger.Binary.Plain as Plain (Encoding, ToCBOR, serialize, toCBOR)
+import Cardano.Ledger.Binary.Plain as Plain (Encoding, serialize, toCBOR)
 import Cardano.Ledger.CertState
 import Cardano.Ledger.Coin
 import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Crypto
 import Cardano.Ledger.Keys
-import Cardano.Ledger.Shelley.Governance (EraGov)
+import Cardano.Ledger.Plutus.Language
 import Cardano.Ledger.Shelley.LedgerState hiding (LedgerState)
 import Cardano.Ledger.UMap as UM
 import Cardano.Ledger.Val
+import Cardano.Streamer.BlockInfo
+import Cardano.Streamer.Ledger
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map.Merge.Strict as Map
 import Ouroboros.Consensus.Byron.Ledger.Block
@@ -50,7 +56,8 @@ import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Ledger.Extended
 import Ouroboros.Consensus.Protocol.Praos
 import Ouroboros.Consensus.Protocol.TPraos
---import Ouroboros.Consensus.Shelley.Ledger (shelleyLedgerState)
+
+-- import Ouroboros.Consensus.Shelley.Ledger (shelleyLedgerState)
 import Ouroboros.Consensus.Shelley.Ledger.Block
 import Ouroboros.Consensus.Shelley.Ledger.Ledger
 import RIO
@@ -58,7 +65,8 @@ import qualified RIO.Map as Map
 
 import Data.SOP.BasicFunctors
 import Data.SOP.Telescope
---import Ouroboros.Consensus.Cardano.Block
+
+-- import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.HardFork.Combinator.Ledger
 import Ouroboros.Consensus.HardFork.Combinator.State.Types as State
 
@@ -158,15 +166,7 @@ pattern TickedLedgerStateConway ti st <-
 applyNewEpochState
   :: Crypto c
   => (ChainValidationState -> a)
-  -> ( forall era
-        . ( EraCrypto era ~ c
-          , EraTxOut era
-          , EraGov era
-          , ToCBOR (NewEpochState era)
-          )
-       => NewEpochState era
-       -> a
-     )
+  -> (forall era. EraApp era c => NewEpochState era -> a)
   -> ExtLedgerState (CardanoBlock c)
   -> a
 applyNewEpochState fByronBased fShelleyBased extLedgerState =
@@ -181,15 +181,7 @@ applyNewEpochState fByronBased fShelleyBased extLedgerState =
 
 applyNonByronNewEpochState
   :: Crypto c
-  => ( forall era
-        . ( EraCrypto era ~ c
-          , EraTxOut era
-          , EraGov era
-          , ToCBOR (NewEpochState era)
-          )
-       => NewEpochState era
-       -> a
-     )
+  => (forall era. EraApp era c => NewEpochState era -> a)
   -> ExtLedgerState (CardanoBlock c)
   -> Maybe a
 applyNonByronNewEpochState f = applyNewEpochState (const Nothing) (Just . f)
@@ -197,16 +189,7 @@ applyNonByronNewEpochState f = applyNewEpochState (const Nothing) (Just . f)
 applyTickedNewEpochState
   :: Crypto c
   => (TransitionInfo -> ChainValidationState -> a)
-  -> ( forall era
-        . ( EraCrypto era ~ c
-          , EraTxOut era
-          , EraGov era
-          , ToCBOR (NewEpochState era)
-          )
-       => TransitionInfo
-       -> NewEpochState era
-       -> a
-     )
+  -> (forall era. EraApp era c => TransitionInfo -> NewEpochState era -> a)
   -> Ticked (ExtLedgerState (CardanoBlock c))
   -> a
 applyTickedNewEpochState fByronBased fShelleyBased tickedExtLedgerState =
@@ -221,16 +204,7 @@ applyTickedNewEpochState fByronBased fShelleyBased tickedExtLedgerState =
 
 applyTickedNonByronNewEpochState
   :: Crypto c
-  => ( forall era
-        . ( EraCrypto era ~ c
-          , EraTxOut era
-          , EraGov era
-          , ToCBOR (NewEpochState era)
-          )
-       => TransitionInfo
-       -> NewEpochState era
-       -> a
-     )
+  => (forall era. EraApp era c => TransitionInfo -> NewEpochState era -> a)
   -> Ticked (ExtLedgerState (CardanoBlock c))
   -> Maybe a
 applyTickedNonByronNewEpochState f =
@@ -317,3 +291,47 @@ detectNewRewards creds prevEpochNo prevRewards epochWithdrawals extLedgerState =
                 curRewards
         pure (curRewards, epochReceivedRewards)
       pure (curEpochNo, res)
+
+-- data StateInfo a = StateInfo
+--   { siEpochNo :: !EpochNo
+--   , si
+
+data BlockStats = BlockStats
+  { bsEpochNo :: !EpochNo
+  , bsLanguageStatsWits :: !(Map Language LanguageStats)
+  -- , esLanguageStatsRefScripts :: !(Map Language LanguageStats)
+  }
+
+newtype EpochStats = EpochStats
+  { esLanguageStatsWits :: Map EpochNo (Map Language LanguageStats)
+  -- , esLanguageStatsRefScripts :: !(Map Language LanguageStats)
+  }
+
+instance Semigroup EpochStats where
+  es1 <> es2 =
+    EpochStats
+      { esLanguageStatsWits =
+          Map.unionWith (Map.unionWith (<>)) (esLanguageStatsWits es1) (esLanguageStatsWits es2)
+      }
+
+instance Monoid EpochStats where
+  mempty = EpochStats{esLanguageStatsWits = mempty}
+
+toEpochStats :: BlockStats -> EpochStats
+toEpochStats BlockStats{..} = EpochStats $ Map.singleton bsEpochNo bsLanguageStatsWits
+
+instance Display EpochStats where
+  display EpochStats{..} =
+    mconcat
+      [ mconcat
+        [ "== " <> display epochNo <> ": ========\n"
+        , "  Witnesses for " <> displayShow lang <> ":"
+        , "\n      "
+        , display langStat
+        , "\n"
+        -- , "  Witnesses: \n      "
+        -- , display esLanguageStatsRefScripts
+        ]
+      | (epochNo, langsStat) <- Map.toList esLanguageStatsWits
+      , (lang, langStat) <- Map.toList langsStat
+      ]

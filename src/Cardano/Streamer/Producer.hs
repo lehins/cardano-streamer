@@ -21,7 +21,7 @@ import Cardano.Slotting.Slot (WithOrigin (..))
 import Cardano.Streamer.Benchmark
 import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
-import Cardano.Streamer.LedgerState (detectNewRewards, extLedgerStateEpochNo, writeNewEpochState)
+import Cardano.Streamer.LedgerState
 import Cardano.Streamer.ProtocolInfo
 import Cardano.Streamer.Time
 import Conduit
@@ -335,7 +335,9 @@ reportValidationError errorMessage slotNo block ledgerState = do
 
 advanceBlock
   :: ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto))
+       -- \^ Intermediate, i.e ticked ledger state
        -> ExtLedgerState (CardanoBlock StandardCrypto)
+       -- \^ Next ledger state
        -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) a
      )
   -> ExtLedgerState (CardanoBlock StandardCrypto)
@@ -362,6 +364,37 @@ advanceBlock_
       (ExtLedgerState (CardanoBlock StandardCrypto))
 advanceBlock_ !prevLedger !block =
   fst <$> advanceBlock (\_ _ -> pure ()) prevLedger block
+
+advanceBlockStats
+  :: ExtLedgerState (CardanoBlock StandardCrypto)
+  -> BlockWithInfo (CardanoBlock StandardCrypto)
+  -> RIO
+      (DbStreamerApp (CardanoBlock StandardCrypto))
+      (ExtLedgerState (CardanoBlock StandardCrypto), BlockStats)
+advanceBlockStats els blk =
+  advanceBlock
+    ( \tls _ ->
+        pure $
+          BlockStats
+            { bsEpochNo = snd (tickedExtLedgerStateEpochNo tls)
+            , bsLanguageStatsWits = blockLanguageStats (biBlockComponent blk)
+            }
+    )
+    els
+    blk
+
+calcEpochStats
+  :: ExtLedgerState (CardanoBlock StandardCrypto)
+  -> ConduitT
+      a
+      c
+      (RIO (DbStreamerApp (CardanoBlock StandardCrypto)))
+      EpochStats
+calcEpochStats initLedgerState = do
+  report <-
+    void (sourceBlocksWithState GetBlock initLedgerState advanceBlockStats)
+      .| foldMapC toEpochStats
+  report <$ writeReport "Epoch" report
 
 data RewardsState c = RewardsState
   { curEpoch :: !EpochNo
@@ -499,12 +532,12 @@ computeRewards creds initLedgerState = do
 
     emptyRewardsState = RewardsState 0 mempty mempty
 
-replayCalcStatsReport
+replayBanchmarkReport
   :: ExtLedgerState (CardanoBlock StandardCrypto)
   -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) StatsReport
-replayCalcStatsReport initLedgerState = do
+replayBanchmarkReport initLedgerState = do
   report <- runConduit $ void (replayWithBenchmarking initLedgerState) .| calcStatsReport
-  report <$ writeReport report
+  report <$ writeReport "Benchmark" report
 
 replayWithBenchmarking
   :: ExtLedgerState (CardanoBlock StandardCrypto)
@@ -541,7 +574,8 @@ runApp Opts{..} = do
         runRIO (app{dsAppOutDir = oOutDir}) $
           case oCommand of
             Replay -> void $ replayChain initLedger
-            Benchmark -> void $ replayCalcStatsReport initLedger
+            Benchmark -> void $ replayBanchmarkReport initLedger
+            Stats -> void $ runConduit $ calcEpochStats initLedger
             ComputeRewards creds ->
               void $ computeRewards (Set.fromList $ NE.toList creds) initLedger
 

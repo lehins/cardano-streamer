@@ -20,6 +20,7 @@ library
   exposed-modules:     Cardano.Streamer.Common
                      , Cardano.Streamer.Benchmark
                      , Cardano.Streamer.BlockInfo
+                     , Cardano.Streamer.Ledger
                      , Cardano.Streamer.LedgerState
                      , Cardano.Streamer.Producer
                      , Cardano.Streamer.ProtocolInfo
@@ -41,6 +42,8 @@ library
                      , cardano-addresses
                      , cardano-binary
                      , cardano-crypto-class
+                     , cardano-ledger-api
+                     , cardano-ledger-alonzo
                      , cardano-ledger-byron
                      , cardano-ledger-core >= 1.3
                      , cardano-ledger-shelley
