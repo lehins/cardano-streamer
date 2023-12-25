@@ -79,7 +79,7 @@ plutusScriptsPerLanguage = foldl' combinePlutusScripts mempty
 
 plutusRefScriptTxBody ::
   EraApp era c => UTxO era -> TxBody era -> Map (ScriptHash c) PlutusWithLanguage
-plutusRefScriptTxBody utxo txBody = Map.withoutKeys refsProvided scriptHashesNeeded
+plutusRefScriptTxBody utxo txBody = refsProvided `Map.restrictKeys` scriptHashesNeeded
   where
     scriptHashesNeeded = getScriptsHashesNeeded $ getScriptsNeeded utxo txBody
     refsProvided = Map.mapMaybe appPlutusScript (appRefScriptsTxBody utxo txBody)
