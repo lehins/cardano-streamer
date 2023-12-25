@@ -311,21 +311,27 @@ instance ToNamedRecord EpochBlockStats where
           [ "EpochNo" .= unEpochNo ebsEpochNo
           , "BlocksSize" .= bsBlocksSize
           ]
-            ++ [ toField (languageToText lang)
+            ++ [ fieldName
                 .= (lsTotalSize <$> Map.lookup lang bsLanguageStatsWits)
-               | lang <- [PlutusV1 .. PlutusV2]
+               | (lang, fieldName) <- plutusFieldNames
                ]
-            ++ [ toField ("RefScript-" <> languageToText lang)
+            ++ [ fieldName
                 .= (lsTotalSize <$> Map.lookup lang esLanguageStatsRefScripts)
-               | lang <- [PlutusV2]
+               | (lang, fieldName) <- plutusRefFieldNames
                ]
+
+plutusFieldNames :: [(Language, Field)]
+plutusFieldNames = [(lang, toField (languageToText lang)) | lang <- [PlutusV1 .. PlutusV2]]
+
+plutusRefFieldNames :: [(Language, Field)]
+plutusRefFieldNames = [(lang, toField ("RefScript-" <> languageToText lang)) | lang <- [PlutusV2]]
 
 epochStatsToNamedCsv :: EpochStats -> NamedCsv
 epochStatsToNamedCsv =
   NamedCsv blockStatsHeader . map (uncurry EpochBlockStats) . Map.toList . unEpochStats
   where
     blockStatsHeader =
-      header $ ["EpochNo", "BlocksSize"] ++ map (toField . languageToText) nonNativeLanguages
+      header $ ["EpochNo", "BlocksSize"] ++ map snd (plutusFieldNames ++ plutusRefFieldNames)
 
 data BlockStats = BlockStats
   { bsBlocksSize :: !Int
