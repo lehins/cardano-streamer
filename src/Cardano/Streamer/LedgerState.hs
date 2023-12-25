@@ -307,31 +307,44 @@ data EpochBlockStats = EpochBlockStats
 instance ToNamedRecord EpochBlockStats where
   toNamedRecord EpochBlockStats{..} =
     let BlockStats{..} = ebsBlockStats
+        mkLangFields fieldNames langStats =
+          mconcat
+            [ [ sizeFieldName .= (lsTotalSize <$> Map.lookup lang langStats)
+              , countFieldName .= (lsTotalCount <$> Map.lookup lang langStats)
+              ]
+            | (lang, sizeFieldName, countFieldName) <- fieldNames
+            ]
      in namedRecord $
           [ "EpochNo" .= unEpochNo ebsEpochNo
           , "BlocksSize" .= bsBlocksSize
           ]
-            ++ [ fieldName
-                .= (lsTotalSize <$> Map.lookup lang bsLanguageStatsWits)
-               | (lang, fieldName) <- plutusFieldNames
-               ]
-            ++ [ fieldName
-                .= (lsTotalSize <$> Map.lookup lang esLanguageStatsRefScripts)
-               | (lang, fieldName) <- plutusRefFieldNames
-               ]
+            ++ mkLangFields plutusFieldNames bsLanguageStatsWits
+            ++ mkLangFields plutusRefFieldNames esLanguageStatsRefScripts
 
-plutusFieldNames :: [(Language, Field)]
-plutusFieldNames = [(lang, toField (languageToText lang)) | lang <- [PlutusV1 .. PlutusV2]]
+mkLangFieldNames :: Field -> [Language] -> [(Language, Field, Field)]
+mkLangFieldNames prefix langs =
+  [ let langName = prefix <> toField (languageToText lang)
+     in (lang, langName <> "-size", langName <> "-count")
+  | lang <- langs
+  ]
 
-plutusRefFieldNames :: [(Language, Field)]
-plutusRefFieldNames = [(lang, toField ("RefScript-" <> languageToText lang)) | lang <- [PlutusV2]]
+plutusFieldNames :: [(Language, Field, Field)]
+plutusFieldNames = mkLangFieldNames "" [PlutusV1 .. PlutusV2]
+
+plutusRefFieldNames :: [(Language, Field, Field)]
+plutusRefFieldNames = mkLangFieldNames "RefScript-" [PlutusV1 .. PlutusV2]
 
 epochStatsToNamedCsv :: EpochStats -> NamedCsv
 epochStatsToNamedCsv =
   NamedCsv blockStatsHeader . map (uncurry EpochBlockStats) . Map.toList . unEpochStats
   where
     blockStatsHeader =
-      header $ ["EpochNo", "BlocksSize"] ++ map snd (plutusFieldNames ++ plutusRefFieldNames)
+      header $
+        ["EpochNo", "BlocksSize"]
+          ++ mconcat
+            [ [sizeFieldName, countFieldName]
+            | (_, sizeFieldName, countFieldName) <- plutusFieldNames ++ plutusRefFieldNames
+            ]
 
 data BlockStats = BlockStats
   { bsBlocksSize :: !Int
@@ -383,14 +396,14 @@ instance Display EpochStats where
 
 instance Display BlockStats where
   display BlockStats{..} =
-    "Total size of blocks: "
+    "  Total size of blocks: "
       <> display bsBlocksSize
       <> mconcat
-        [ "  Witnesses for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
+        [ "\n  Witnesses for " <> displayShow lang <> ":\n      " <> display langStats
         | (lang, langStats) <- Map.toList bsLanguageStatsWits
         ]
       <> mconcat
-        [ "  Reference scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
+        [ "\n  Reference scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
         | (lang, langStats) <- Map.toList esLanguageStatsRefScripts
         ]
 

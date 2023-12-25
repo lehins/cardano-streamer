@@ -400,9 +400,10 @@ calcEpochStats initLedgerState = do
   epochStats <-
     void (sourceBlocksWithState GetBlock initLedgerState advanceBlockStats)
       .| foldMapC toEpochStats
-  logInfo $ display $ fold $ unEpochStats epochStats
   writeReport "EpochStats" epochStats
-  epochStats <$ writeNamedCsv "EpochStats" (epochStatsToNamedCsv epochStats)
+  writeNamedCsv "EpochStats" (epochStatsToNamedCsv epochStats)
+  logInfo $ "Final summary: \n    " <> display (fold $ unEpochStats epochStats)
+  pure epochStats
 
 data RewardsState c = RewardsState
   { curEpoch :: !EpochNo
