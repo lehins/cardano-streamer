@@ -380,7 +380,8 @@ advanceBlockStats els blk =
             , ebsBlockStats =
                 BlockStats
                   { bsBlocksSize = fromIntegral (biBlockSize blk)
-                  , bsLanguageStatsWits = blockLanguageStats (biBlockComponent blk)
+                  , bsLanguageStatsWits = languageStatsTxWits (biBlockComponent blk)
+                  , esLanguageStatsOutScripts = languageStatsOutsTxBody (biBlockComponent blk)
                   , esLanguageStatsRefScripts =
                       blockLanguageRefScriptsStats tls (biBlockComponent blk)
                   }

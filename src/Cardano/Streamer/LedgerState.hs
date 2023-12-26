@@ -289,7 +289,8 @@ detectNewRewards creds prevEpochNo prevRewards epochWithdrawals extLedgerState =
                     -- Need to adjust for withdrawals
                     let cpw = maybe cp (cp <->) $ Map.lookup cred epochWithdrawals
                     guard (cpw /= cc) -- no change, means no new rewards
-                    when (cc < cpw) $ error "New reward amounts can't be smaller than the previous ones"
+                    when (cc < cpw) $
+                      error "New reward amounts can't be smaller than the previous ones"
                     let newRewardAmount = cc <-> cpw
                     guard (newRewardAmount /= mempty) -- Discard zero change to rewards
                     Just newRewardAmount -- new reward amount
@@ -319,6 +320,7 @@ instance ToNamedRecord EpochBlockStats where
           , "BlocksSize" .= bsBlocksSize
           ]
             ++ mkLangFields plutusFieldNames bsLanguageStatsWits
+            ++ mkLangFields plutusOutFieldNames esLanguageStatsOutScripts
             ++ mkLangFields plutusRefFieldNames esLanguageStatsRefScripts
 
 mkLangFieldNames :: Field -> [Language] -> [(Language, Field, Field)]
@@ -330,6 +332,9 @@ mkLangFieldNames prefix langs =
 
 plutusFieldNames :: [(Language, Field, Field)]
 plutusFieldNames = mkLangFieldNames "" [PlutusV1 .. PlutusV2]
+
+plutusOutFieldNames :: [(Language, Field, Field)]
+plutusOutFieldNames = mkLangFieldNames "OutScript-" [PlutusV1 .. PlutusV2]
 
 plutusRefFieldNames :: [(Language, Field, Field)]
 plutusRefFieldNames = mkLangFieldNames "RefScript-" [PlutusV1 .. PlutusV2]
@@ -343,12 +348,14 @@ epochStatsToNamedCsv =
         ["EpochNo", "BlocksSize"]
           ++ mconcat
             [ [sizeFieldName, countFieldName]
-            | (_, sizeFieldName, countFieldName) <- plutusFieldNames ++ plutusRefFieldNames
+            | (_, sizeFieldName, countFieldName) <-
+                plutusFieldNames ++ plutusOutFieldNames ++ plutusRefFieldNames
             ]
 
 data BlockStats = BlockStats
   { bsBlocksSize :: !Int
   , bsLanguageStatsWits :: !(Map Language LanguageStats)
+  , esLanguageStatsOutScripts :: !(Map Language LanguageStats)
   , esLanguageStatsRefScripts :: !(Map Language LanguageStats)
   }
 
@@ -358,6 +365,8 @@ instance Semigroup BlockStats where
       { bsBlocksSize = bsBlocksSize es1 + bsBlocksSize es2
       , bsLanguageStatsWits =
           Map.unionWith (<>) (bsLanguageStatsWits es1) (bsLanguageStatsWits es2)
+      , esLanguageStatsOutScripts =
+          Map.unionWith (<>) (esLanguageStatsOutScripts es1) (esLanguageStatsOutScripts es2)
       , esLanguageStatsRefScripts =
           Map.unionWith (<>) (esLanguageStatsRefScripts es1) (esLanguageStatsRefScripts es2)
       }
@@ -367,6 +376,7 @@ instance Monoid BlockStats where
     BlockStats
       { bsBlocksSize = 0
       , bsLanguageStatsWits = mempty
+      , esLanguageStatsOutScripts = mempty
       , esLanguageStatsRefScripts = mempty
       }
 
@@ -401,6 +411,10 @@ instance Display BlockStats where
       <> mconcat
         [ "\n  Witnesses for " <> displayShow lang <> ":\n      " <> display langStats
         | (lang, langStats) <- Map.toList bsLanguageStatsWits
+        ]
+      <> mconcat
+        [ "\n  Output scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
+        | (lang, langStats) <- Map.toList esLanguageStatsRefScripts
         ]
       <> mconcat
         [ "\n  Reference scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"

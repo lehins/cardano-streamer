@@ -331,7 +331,7 @@ filterBlockWithdrawals creds =
 accLanguageStats
   :: forall c
    . Crypto c
-  => (forall era. EraApp era c => Tx era -> Map (ScriptHash c) PlutusWithLanguage)
+  => (forall era. EraApp era c => Tx era -> [PlutusWithLanguage])
   -> CardanoBlock c
   -> Map Language LanguageStats
 accLanguageStats fTx =
@@ -347,8 +347,11 @@ calcStatsForPlutusWithLanguage f = foldl' accStats Map.empty
     accStats acc =
       Map.unionWith (<>) acc . Map.map (foldMap' toLanguageStats) . plutusScriptsPerLanguage . f
 
-blockLanguageStats :: forall c. Crypto c => CardanoBlock c -> Map Language LanguageStats
-blockLanguageStats = accLanguageStats $ \tx -> plutusScriptTxWits (tx ^. witsTxL)
+languageStatsTxWits :: forall c. Crypto c => CardanoBlock c -> Map Language LanguageStats
+languageStatsTxWits = accLanguageStats $ \tx -> Map.elems $ plutusScriptTxWits (tx ^. witsTxL)
+
+languageStatsOutsTxBody :: forall c. Crypto c => CardanoBlock c -> Map Language LanguageStats
+languageStatsOutsTxBody = accLanguageStats $ \tx -> plutusOutScriptTxBody (tx ^. bodyTxL)
 
 toLanguageStats :: PlutusBinary -> LanguageStats
 toLanguageStats (PlutusBinary binaryBlutus) =
