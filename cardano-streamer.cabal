@@ -3,7 +3,7 @@ version:             0.1.0.0
 synopsis:            Short description
 description:         Please see the README on GitHub at <https://github.com/lehins/cardano-streamer#readme>
 homepage:            https://github.com/lehins/cardano-streamer
-license:             BSD3
+license:             Apache-2.0
 license-file:        LICENSE
 author:              Alexey Kuleshevich
 maintainer:          alexey@kuleshevi.ch
