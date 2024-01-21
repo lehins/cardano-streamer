@@ -44,6 +44,7 @@ library
                      , cardano-crypto-class
                      , cardano-ledger-api
                      , cardano-ledger-alonzo
+                     , cardano-ledger-allegra
                      , cardano-ledger-babbage
                      , cardano-ledger-byron
                      , cardano-ledger-core >= 1.3

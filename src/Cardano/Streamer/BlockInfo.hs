@@ -24,7 +24,6 @@ import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Crypto
 import Cardano.Ledger.Keys
-import Cardano.Ledger.Plutus.Language
 import Cardano.Ledger.SafeHash
 import Cardano.Ledger.Val
 import Cardano.Protocol.TPraos.BHeader
@@ -33,7 +32,6 @@ import Cardano.Streamer.Ledger
 import Control.Monad.Trans.Fail.String (errorFail)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
-import qualified Data.ByteString.Short as SBS
 import Data.Foldable (foldMap')
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
@@ -328,68 +326,68 @@ filterBlockWithdrawals creds =
         )
         txs
 
-accLanguageStats
+accScriptsStats
   :: forall c
    . Crypto c
-  => (forall era. EraApp era c => Tx era -> [PlutusWithLanguage])
+  => (forall era. EraApp era c => Tx era -> [AppScript])
   -> CardanoBlock c
-  -> Map Language LanguageStats
-accLanguageStats fTx =
-  applyBlockTxs (const Map.empty) (calcStatsForPlutusWithLanguage fTx)
+  -> Map AppLanguage ScriptsStats
+accScriptsStats fTx =
+  applyBlockTxs (const Map.empty) (calcStatsForAppScripts fTx)
 
-calcStatsForPlutusWithLanguage
+calcStatsForAppScripts
   :: (Foldable f, Foldable t)
-  => (a -> f PlutusWithLanguage)
+  => (a -> f AppScript)
   -> t a
-  -> Map Language LanguageStats
-calcStatsForPlutusWithLanguage f = foldl' accStats Map.empty
+  -> Map AppLanguage ScriptsStats
+calcStatsForAppScripts f = foldl' accStats Map.empty
   where
     accStats acc =
-      Map.unionWith (<>) acc . Map.map (foldMap' toLanguageStats) . plutusScriptsPerLanguage . f
+      Map.unionWith (<>) acc . Map.map (foldMap' toScriptsStats) . scriptsPerLanguage . f
 
-languageStatsTxWits :: forall c. Crypto c => CardanoBlock c -> Map Language LanguageStats
-languageStatsTxWits = accLanguageStats $ \tx -> Map.elems $ plutusScriptTxWits (tx ^. witsTxL)
+languageStatsTxWits :: forall c. Crypto c => CardanoBlock c -> Map AppLanguage ScriptsStats
+languageStatsTxWits = accScriptsStats $ \tx -> Map.elems $ appScriptTxWits (tx ^. witsTxL)
 
-languageStatsOutsTxBody :: forall c. Crypto c => CardanoBlock c -> Map Language LanguageStats
-languageStatsOutsTxBody = accLanguageStats $ \tx -> plutusOutScriptTxBody (tx ^. bodyTxL)
+languageStatsOutsTxBody :: forall c. Crypto c => CardanoBlock c -> Map AppLanguage ScriptsStats
+languageStatsOutsTxBody = accScriptsStats $ \tx -> outScriptTxBody (tx ^. bodyTxL)
 
-toLanguageStats :: PlutusBinary -> LanguageStats
-toLanguageStats (PlutusBinary binaryBlutus) =
-  let sz = SBS.length binaryBlutus
-   in LanguageStats
+toScriptsStats :: AppScript -> ScriptsStats
+toScriptsStats script =
+  let sz = appScriptSize script
+   in ScriptsStats
         { lsTotalCount = 1
         , lsTotalSize = sz
         , lsMaxSize = sz
         , lsMinSize = sz
         }
 
-data LanguageStats = LanguageStats
+data ScriptsStats = ScriptsStats
   { lsTotalCount :: !Int
   , lsTotalSize :: !Int
   , lsMaxSize :: !Int
   , lsMinSize :: !Int
   }
 
-instance Semigroup LanguageStats where
+instance Semigroup ScriptsStats where
   ls1 <> ls2 =
-    LanguageStats
+    ScriptsStats
       { lsTotalCount = lsTotalCount ls1 + lsTotalCount ls2
       , lsTotalSize = lsTotalSize ls1 + lsTotalSize ls2
       , lsMaxSize = max (lsMaxSize ls1) (lsMaxSize ls2)
       , lsMinSize = min (lsMinSize ls1) (lsMinSize ls2)
       }
 
-instance Monoid LanguageStats where
+instance Monoid ScriptsStats where
   mempty =
-    LanguageStats
+    ScriptsStats
       { lsTotalCount = 0
       , lsTotalSize = 0
       , lsMaxSize = minBound
       , lsMinSize = maxBound
       }
 
-instance Display LanguageStats where
-  display LanguageStats{..} =
+instance Display ScriptsStats where
+  display ScriptsStats{..} =
     "Count: "
       <> display lsTotalCount
       <> " Size: "

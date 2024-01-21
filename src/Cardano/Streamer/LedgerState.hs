@@ -48,7 +48,6 @@ import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Crypto
 import Cardano.Ledger.Keys
-import Cardano.Ledger.Plutus.Language
 import Cardano.Ledger.Shelley.LedgerState hiding (LedgerState)
 import Cardano.Ledger.UMap as UM
 import Cardano.Ledger.Val
@@ -319,25 +318,25 @@ instance ToNamedRecord EpochBlockStats where
           [ "EpochNo" .= unEpochNo ebsEpochNo
           , "BlocksSize" .= bsBlocksSize
           ]
-            ++ mkLangFields plutusFieldNames bsLanguageStatsWits
-            ++ mkLangFields plutusOutFieldNames esLanguageStatsOutScripts
-            ++ mkLangFields plutusRefFieldNames esLanguageStatsRefScripts
+            ++ mkLangFields scriptFieldNames bsScriptsStatsWits
+            ++ mkLangFields scriptOutFieldNames esScriptsStatsOutScripts
+            ++ mkLangFields scriptRefFieldNames esScriptsStatsRefScripts
 
-mkLangFieldNames :: Field -> [Language] -> [(Language, Field, Field)]
+mkLangFieldNames :: Field -> [AppLanguage] -> [(AppLanguage, Field, Field)]
 mkLangFieldNames prefix langs =
-  [ let langName = prefix <> toField (languageToText lang)
+  [ let langName = prefix <> toField (appLanguageToText lang)
      in (lang, langName <> "-size", langName <> "-count")
   | lang <- langs
   ]
 
-plutusFieldNames :: [(Language, Field, Field)]
-plutusFieldNames = mkLangFieldNames "" [PlutusV1 .. PlutusV2]
+scriptFieldNames :: [(AppLanguage, Field, Field)]
+scriptFieldNames = mkLangFieldNames "" [minBound .. maxBound]
 
-plutusOutFieldNames :: [(Language, Field, Field)]
-plutusOutFieldNames = mkLangFieldNames "OutScript-" [PlutusV1 .. PlutusV2]
+scriptOutFieldNames :: [(AppLanguage, Field, Field)]
+scriptOutFieldNames = mkLangFieldNames "OutScript-" [minBound .. maxBound]
 
-plutusRefFieldNames :: [(Language, Field, Field)]
-plutusRefFieldNames = mkLangFieldNames "RefScript-" [PlutusV1 .. PlutusV2]
+scriptRefFieldNames :: [(AppLanguage, Field, Field)]
+scriptRefFieldNames = mkLangFieldNames "RefScript-" [minBound .. maxBound]
 
 epochStatsToNamedCsv :: EpochStats -> NamedCsv
 epochStatsToNamedCsv =
@@ -349,35 +348,42 @@ epochStatsToNamedCsv =
           ++ mconcat
             [ [sizeFieldName, countFieldName]
             | (_, sizeFieldName, countFieldName) <-
-                plutusFieldNames ++ plutusOutFieldNames ++ plutusRefFieldNames
+                scriptFieldNames ++ scriptOutFieldNames ++ scriptRefFieldNames
             ]
 
 data BlockStats = BlockStats
   { bsBlocksSize :: !Int
-  , bsLanguageStatsWits :: !(Map Language LanguageStats)
-  , esLanguageStatsOutScripts :: !(Map Language LanguageStats)
-  , esLanguageStatsRefScripts :: !(Map Language LanguageStats)
+  , bsScriptsStatsWits :: !(Map AppLanguage ScriptsStats)
+  , esScriptsStatsOutScripts :: !(Map AppLanguage ScriptsStats)
+  , esScriptsStatsRefScripts :: !(Map AppLanguage ScriptsStats)
+  , esScriptsStatsAllRefScripts :: !(Map AppLanguage ScriptsStats)
   }
 
 instance Semigroup BlockStats where
   es1 <> es2 =
     BlockStats
       { bsBlocksSize = bsBlocksSize es1 + bsBlocksSize es2
-      , bsLanguageStatsWits =
-          Map.unionWith (<>) (bsLanguageStatsWits es1) (bsLanguageStatsWits es2)
-      , esLanguageStatsOutScripts =
-          Map.unionWith (<>) (esLanguageStatsOutScripts es1) (esLanguageStatsOutScripts es2)
-      , esLanguageStatsRefScripts =
-          Map.unionWith (<>) (esLanguageStatsRefScripts es1) (esLanguageStatsRefScripts es2)
+      , bsScriptsStatsWits =
+          Map.unionWith (<>) (bsScriptsStatsWits es1) (bsScriptsStatsWits es2)
+      , esScriptsStatsOutScripts =
+          Map.unionWith (<>) (esScriptsStatsOutScripts es1) (esScriptsStatsOutScripts es2)
+      , esScriptsStatsRefScripts =
+          Map.unionWith (<>) (esScriptsStatsRefScripts es1) (esScriptsStatsRefScripts es2)
+      , esScriptsStatsAllRefScripts =
+          Map.unionWith
+            (<>)
+            (esScriptsStatsAllRefScripts es1)
+            (esScriptsStatsAllRefScripts es2)
       }
 
 instance Monoid BlockStats where
   mempty =
     BlockStats
       { bsBlocksSize = 0
-      , bsLanguageStatsWits = mempty
-      , esLanguageStatsOutScripts = mempty
-      , esLanguageStatsRefScripts = mempty
+      , bsScriptsStatsWits = mempty
+      , esScriptsStatsOutScripts = mempty
+      , esScriptsStatsRefScripts = mempty
+      , esScriptsStatsAllRefScripts = mempty
       }
 
 newtype EpochStats = EpochStats
@@ -410,15 +416,19 @@ instance Display BlockStats where
       <> display bsBlocksSize
       <> mconcat
         [ "\n  Witnesses for " <> displayShow lang <> ":\n      " <> display langStats
-        | (lang, langStats) <- Map.toList bsLanguageStatsWits
+        | (lang, langStats) <- Map.toList bsScriptsStatsWits
         ]
       <> mconcat
         [ "\n  Output scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
-        | (lang, langStats) <- Map.toList esLanguageStatsRefScripts
+        | (lang, langStats) <- Map.toList esScriptsStatsRefScripts
         ]
       <> mconcat
-        [ "\n  Reference scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
-        | (lang, langStats) <- Map.toList esLanguageStatsRefScripts
+        [ "\n  Evaluated reference scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
+        | (lang, langStats) <- Map.toList esScriptsStatsRefScripts
+        ]
+      <> mconcat
+        [ "\n  All reference scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
+        | (lang, langStats) <- Map.toList esScriptsStatsAllRefScripts
         ]
 
 applyTickedNewEpochStateWithBlock
@@ -465,15 +475,18 @@ applyTickedNewEpochStateWithTxs fByron fShelleyOnwards =
     (\_ti nes -> fShelleyOnwards nes . getShelleyOnwardsTxs)
     (\_ti nes -> fShelleyOnwards nes . getShelleyOnwardsTxs)
 
+-- TODO: figure out how to get access to intermediate UTxOs added in the block
 blockLanguageRefScriptsStats
   :: Crypto c
   => Ticked (ExtLedgerState (CardanoBlock c))
   -> CardanoBlock c
-  -> Map Language LanguageStats
+  -> (Map AppLanguage ScriptsStats, Map AppLanguage ScriptsStats)
 blockLanguageRefScriptsStats =
   applyTickedNewEpochStateWithTxs
-    (\_ _ -> Map.empty)
-    ( \nes ->
+    (\_ _ -> (Map.empty, Map.empty))
+    ( \nes txs ->
         let utxo = nes ^. nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL
-         in calcStatsForPlutusWithLanguage (\tx -> plutusRefScriptTxBody utxo (tx ^. bodyTxL))
+            (usedRefScripts, allRefScripts) =
+              unzip $ map (\tx -> refScriptsTxBody utxo (tx ^. bodyTxL)) txs
+         in (calcStatsForAppScripts id usedRefScripts, calcStatsForAppScripts id allRefScripts)
     )

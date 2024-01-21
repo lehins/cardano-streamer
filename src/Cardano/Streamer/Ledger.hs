@@ -3,24 +3,65 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Cardano.Streamer.Ledger where
 
 import Cardano.Ledger.Alonzo.Scripts
+import Cardano.Ledger.Allegra.Scripts
+import Cardano.Ledger.Shelley.Scripts
 import Cardano.Ledger.Api.Era
 import Cardano.Ledger.Babbage.Core
-import Cardano.Ledger.Babbage.UTxO
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary.Plain (ToCBOR)
+import Cardano.Ledger.MemoBytes
 import Cardano.Ledger.Plutus.Language
 import Cardano.Ledger.Shelley.LedgerState (NewEpochState)
 import Cardano.Ledger.UTxO
 import Cardano.Streamer.Common
+import qualified Data.ByteString.Short as SBS
 import qualified Data.Map.Strict as Map
+import Data.Maybe (fromJust)
 import qualified Data.Set as Set
 
-data PlutusWithLanguage where
-  PlutusWithLanguage :: PlutusLanguage l => Plutus l -> PlutusWithLanguage
+data AppLanguage
+  = AppNativeLanguage
+  | AppPlutusLanguage !Language
+  deriving (Eq, Ord, Show)
+
+instance Enum AppLanguage where
+  fromEnum = \case
+    AppNativeLanguage -> 0
+    AppPlutusLanguage l -> succ $ fromEnum l
+  toEnum = \case
+    0 -> AppNativeLanguage
+    n -> AppPlutusLanguage $ toEnum (pred n)
+
+instance Bounded AppLanguage where
+  minBound = AppNativeLanguage
+  maxBound = AppPlutusLanguage maxBound
+
+appLanguageToText :: AppLanguage -> Text
+appLanguageToText = \case
+  AppNativeLanguage -> "Native"
+  AppPlutusLanguage lang -> languageToText lang
+
+data AppScript where
+  AppMultiSig :: MultiSig era -> AppScript
+  AppTimelock :: Timelock era -> AppScript
+  AppPlutusScript :: PlutusLanguage l => Plutus l -> AppScript
+
+appLanguage :: AppScript -> AppLanguage
+appLanguage = \case
+  AppMultiSig{} -> AppNativeLanguage
+  AppTimelock{} -> AppNativeLanguage
+  AppPlutusScript p -> AppPlutusLanguage (plutusLanguage p)
+
+appScriptSize :: AppScript -> Int
+appScriptSize = \case
+  AppMultiSig ns -> SBS.length $ getMemoRawBytes ns
+  AppTimelock ns -> SBS.length $ getMemoRawBytes ns
+  AppPlutusScript ps -> SBS.length (unPlutusBinary (plutusBinary ps))
 
 class
   ( EraSegWits era
@@ -32,49 +73,65 @@ class
   EraApp era c
     | era -> c
   where
-  appPlutusScript :: Script era -> Maybe PlutusWithLanguage
-  appPlutusScript _ = Nothing
+  appScript :: Script era -> AppScript
 
-  appOutputScriptsTxBody :: TxBody era -> [Script era]
-  appOutputScriptsTxBody _ = mempty
+  appOutScriptsTxBody :: TxBody era -> [Script era]
+  appOutScriptsTxBody = mempty
 
-  appRefScriptsTxBody :: UTxO era -> TxBody era -> Map (ScriptHash (EraCrypto era)) (Script era)
-  appRefScriptsTxBody _ = mempty
+  appRefScriptsTxBody :: UTxO era -> TxBody era -> [Script era]
+  appRefScriptsTxBody = mempty
 
-instance Crypto c => EraApp (ShelleyEra c) c
-instance Crypto c => EraApp (AllegraEra c) c
-instance Crypto c => EraApp (MaryEra c) c
+instance Crypto c => EraApp (ShelleyEra c) c where
+  appScript = AppMultiSig
+
+instance Crypto c => EraApp (AllegraEra c) c where
+  appScript = AppTimelock
+
+instance Crypto c => EraApp (MaryEra c) c where
+  appScript = AppTimelock
 
 instance Crypto c => EraApp (AlonzoEra c) c where
-  appPlutusScript = alonzoAppPlutusScript
+  appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
 
 instance Crypto c => EraApp (BabbageEra c) c where
-  appPlutusScript = alonzoAppPlutusScript
-  appOutputScriptsTxBody = babbageScriptOutsTxBody
-  appRefScriptsTxBody = babbageRefScriptsTxBody
+  appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
+  appOutScriptsTxBody = babbageScriptOutsTxBody
+  appRefScriptsTxBody = getAllReferenceScripts
 
 instance Crypto c => EraApp (ConwayEra c) c where
-  appPlutusScript = alonzoAppPlutusScript
-  appOutputScriptsTxBody = babbageScriptOutsTxBody
-  appRefScriptsTxBody = babbageRefScriptsTxBody
+  appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
+  appOutScriptsTxBody = babbageScriptOutsTxBody
+  appRefScriptsTxBody = getAllReferenceScripts
 
-alonzoAppPlutusScript :: AlonzoEraScript era => Script era -> Maybe PlutusWithLanguage
-alonzoAppPlutusScript script = do
+appTimelockScript :: (EraScript era, NativeScript era ~ Timelock era) => Script era -> Maybe AppScript
+appTimelockScript script = AppTimelock <$> getNativeScript script
+
+appPlutusScript :: AlonzoEraScript era => Script era -> Maybe AppScript
+appPlutusScript script = do
   ps <- toPlutusScript script
-  Just $ withPlutusScript ps PlutusWithLanguage
+  Just $ withPlutusScript ps AppPlutusScript
 
-babbageRefScriptsTxBody
+-- | Get all scripts referenced by the transaction, regardless if they are used or not.
+getAllReferenceScripts
   :: BabbageEraTxBody era
   => UTxO era
   -> TxBody era
-  -> Map (ScriptHash (EraCrypto era)) (Script era)
-babbageRefScriptsTxBody utxo txBody =
-  getReferenceScripts utxo $
-    (txBody ^. referenceInputsTxBodyL) `Set.union` (txBody ^. inputsTxBodyL)
+  -> [Script era]
+getAllReferenceScripts (UTxO mp) txBody =
+  mapMaybe refScript $ Map.elems $ Map.restrictKeys mp inputs
+  where
+    inputs = (txBody ^. referenceInputsTxBodyL) `Set.union` (txBody ^. inputsTxBodyL)
+    refScript txOut =
+      case txOut ^. referenceScriptTxOutL of
+        SNothing -> Nothing
+        SJust script -> Just script
 
 plutusScriptTxWits :: EraApp era c => TxWits era -> Map (ScriptHash c) PlutusWithLanguage
 plutusScriptTxWits txWits =
-  Map.mapMaybe appPlutusScript (txWits ^. scriptTxWitsL)
+  Map.mapMaybe appPlutusScriptWithLanguage (txWits ^. scriptTxWitsL)
+
+appScriptTxWits :: EraApp era c => TxWits era -> Map (ScriptHash c) AppScript
+appScriptTxWits txWits = Map.map appScript (txWits ^. scriptTxWitsL)
 
 -- | Plutus Scripts from outputs
 babbageScriptOutsTxBody
@@ -117,12 +174,42 @@ plutusScriptsPerLanguage = foldl' combinePlutusScripts mempty
       PlutusWithLanguage p ->
         Map.insertWith (<>) (plutusLanguage p) (Set.singleton (plutusBinary p)) acc
 
-plutusRefScriptTxBody
-  :: EraApp era c => UTxO era -> TxBody era -> Map (ScriptHash c) PlutusWithLanguage
-plutusRefScriptTxBody utxo txBody = refsProvided `Map.restrictKeys` scriptHashesNeeded
+scriptsPerLanguage :: Foldable f => f AppScript -> Map AppLanguage [AppScript]
+scriptsPerLanguage = foldl' combinePlutusScripts mempty
   where
+    combinePlutusScripts acc script =
+      Map.insertWith (<>) (appLanguage script) [script] acc
+
+-- | Produce all of the reference scripts that are evaluated and all of the provided
+-- reference scripts. It is possible for the list to contain duplicate scripts and scripts
+-- that are not even in the Map.
+refScriptsTxBody
+  :: EraApp era c
+  => UTxO era
+  -> TxBody era
+  -> (Map (ScriptHash c) AppScript, [AppScript])
+refScriptsTxBody utxo txBody =
+  (refScriptsUsed, map appScript refScripts)
+  where
+    refScripts = appRefScriptsTxBody utxo txBody
     scriptHashesNeeded = getScriptsHashesNeeded $ getScriptsNeeded utxo txBody
-    refsProvided = Map.mapMaybe appPlutusScript (appRefScriptsTxBody utxo txBody)
+    refScriptsProvided = Map.fromList [(hashScript s, s) | s <- refScripts]
+    refScriptsUsed =
+      Map.map appScript $
+        (refScriptsProvided `Map.restrictKeys` scriptHashesNeeded)
+          `Map.union` Map.filter isNativeScript refScriptsProvided
+
+outScriptTxBody :: EraApp era c => TxBody era -> [AppScript]
+outScriptTxBody = map appScript . appOutScriptsTxBody
 
 plutusOutScriptTxBody :: EraApp era c => TxBody era -> [PlutusWithLanguage]
-plutusOutScriptTxBody = mapMaybe appPlutusScript . appOutputScriptsTxBody
+plutusOutScriptTxBody = mapMaybe appPlutusScriptWithLanguage . appOutScriptsTxBody
+
+data PlutusWithLanguage where
+  PlutusWithLanguage :: PlutusLanguage l => Plutus l -> PlutusWithLanguage
+
+appPlutusScriptWithLanguage :: EraApp era c => Script era -> Maybe PlutusWithLanguage
+appPlutusScriptWithLanguage script =
+  case appScript script of
+    AppPlutusScript plutus -> Just $ PlutusWithLanguage plutus
+    _ -> Nothing

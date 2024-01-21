@@ -378,13 +378,15 @@ advanceBlockStats els blk =
           EpochBlockStats
             { ebsEpochNo = snd (tickedExtLedgerStateEpochNo tls)
             , ebsBlockStats =
-                BlockStats
-                  { bsBlocksSize = fromIntegral (biBlockSize blk)
-                  , bsLanguageStatsWits = languageStatsTxWits (biBlockComponent blk)
-                  , esLanguageStatsOutScripts = languageStatsOutsTxBody (biBlockComponent blk)
-                  , esLanguageStatsRefScripts =
-                      blockLanguageRefScriptsStats tls (biBlockComponent blk)
-                  }
+                case blockLanguageRefScriptsStats tls (biBlockComponent blk) of
+                  (refScriptsStats, allRefScriptsStats) ->
+                    BlockStats
+                      { bsBlocksSize = fromIntegral (biBlockSize blk)
+                      , bsScriptsStatsWits = languageStatsTxWits (biBlockComponent blk)
+                      , esScriptsStatsOutScripts = languageStatsOutsTxBody (biBlockComponent blk)
+                      , esScriptsStatsRefScripts = refScriptsStats
+                      , esScriptsStatsAllRefScripts = allRefScriptsStats
+                      }
             }
     )
     els
