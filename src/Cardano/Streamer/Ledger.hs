@@ -7,16 +7,18 @@
 
 module Cardano.Streamer.Ledger where
 
-import Cardano.Ledger.Alonzo.Scripts
 import Cardano.Ledger.Allegra.Scripts
-import Cardano.Ledger.Shelley.Scripts
+import Cardano.Ledger.Alonzo.Scripts
+import Cardano.Ledger.Alonzo.Tx
 import Cardano.Ledger.Api.Era
+import Cardano.Ledger.Babbage.Collateral (collOuts)
 import Cardano.Ledger.Babbage.Core
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary.Plain (ToCBOR)
 import Cardano.Ledger.MemoBytes
 import Cardano.Ledger.Plutus.Language
 import Cardano.Ledger.Shelley.LedgerState (NewEpochState)
+import Cardano.Ledger.Shelley.Scripts
 import Cardano.Ledger.UTxO
 import Cardano.Streamer.Common
 import qualified Data.ByteString.Short as SBS
@@ -81,27 +83,40 @@ class
   appRefScriptsTxBody :: UTxO era -> TxBody era -> [Script era]
   appRefScriptsTxBody = mempty
 
+  -- | All of the unspent outputs produced by the transaction
+  utxoTx :: Tx era -> UTxO era
+
 instance Crypto c => EraApp (ShelleyEra c) c where
   appScript = AppMultiSig
+  utxoTx tx = txouts (tx ^. bodyTxL)
 
 instance Crypto c => EraApp (AllegraEra c) c where
   appScript = AppTimelock
+  utxoTx tx = txouts (tx ^. bodyTxL)
 
 instance Crypto c => EraApp (MaryEra c) c where
   appScript = AppTimelock
+  utxoTx tx = txouts (tx ^. bodyTxL)
 
 instance Crypto c => EraApp (AlonzoEra c) c where
   appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
+  utxoTx tx = txouts (tx ^. bodyTxL)
 
 instance Crypto c => EraApp (BabbageEra c) c where
   appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
   appOutScriptsTxBody = babbageScriptOutsTxBody
   appRefScriptsTxBody = getAllReferenceScripts
+  utxoTx tx
+    | tx ^. isValidTxL == IsValid True = txouts (tx ^. bodyTxL)
+    | otherwise = collOuts (tx ^. bodyTxL)
 
 instance Crypto c => EraApp (ConwayEra c) c where
   appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
   appOutScriptsTxBody = babbageScriptOutsTxBody
   appRefScriptsTxBody = getAllReferenceScripts
+  utxoTx tx
+    | tx ^. isValidTxL == IsValid True = txouts (tx ^. bodyTxL)
+    | otherwise = collOuts (tx ^. bodyTxL)
 
 appTimelockScript :: (EraScript era, NativeScript era ~ Timelock era) => Script era -> Maybe AppScript
 appTimelockScript script = AppTimelock <$> getNativeScript script
@@ -126,9 +141,9 @@ getAllReferenceScripts (UTxO mp) txBody =
         SNothing -> Nothing
         SJust script -> Just script
 
-plutusScriptTxWits :: EraApp era c => TxWits era -> Map (ScriptHash c) PlutusWithLanguage
-plutusScriptTxWits txWits =
-  Map.mapMaybe appPlutusScriptWithLanguage (txWits ^. scriptTxWitsL)
+-- plutusScriptTxWits :: EraApp era c => TxWits era -> Map (ScriptHash c) PlutusWithLanguage
+-- plutusScriptTxWits txWits =
+--   Map.mapMaybe appPlutusScriptWithLanguage (txWits ^. scriptTxWitsL)
 
 appScriptTxWits :: EraApp era c => TxWits era -> Map (ScriptHash c) AppScript
 appScriptTxWits txWits = Map.map appScript (txWits ^. scriptTxWitsL)
@@ -167,12 +182,12 @@ babbageScriptOutsTxBody txBody =
 --   -> Map (ScriptHash (EraCrypto era)) PlutusWithLanguage
 -- plutusScriptTx tx = plutusScriptTxWits (tx ^. witsTxL) <> plutusScriptOutsTxBody (tx ^. bodyTxL)
 
-plutusScriptsPerLanguage :: Foldable f => f PlutusWithLanguage -> Map Language (Set PlutusBinary)
-plutusScriptsPerLanguage = foldl' combinePlutusScripts mempty
-  where
-    combinePlutusScripts acc = \case
-      PlutusWithLanguage p ->
-        Map.insertWith (<>) (plutusLanguage p) (Set.singleton (plutusBinary p)) acc
+-- plutusScriptsPerLanguage :: Foldable f => f PlutusWithLanguage -> Map Language (Set PlutusBinary)
+-- plutusScriptsPerLanguage = foldl' combinePlutusScripts mempty
+--   where
+--     combinePlutusScripts acc = \case
+--       PlutusWithLanguage p ->
+--         Map.insertWith (<>) (plutusLanguage p) (Set.singleton (plutusBinary p)) acc
 
 scriptsPerLanguage :: Foldable f => f AppScript -> Map AppLanguage [AppScript]
 scriptsPerLanguage = foldl' combinePlutusScripts mempty
@@ -202,14 +217,14 @@ refScriptsTxBody utxo txBody =
 outScriptTxBody :: EraApp era c => TxBody era -> [AppScript]
 outScriptTxBody = map appScript . appOutScriptsTxBody
 
-plutusOutScriptTxBody :: EraApp era c => TxBody era -> [PlutusWithLanguage]
-plutusOutScriptTxBody = mapMaybe appPlutusScriptWithLanguage . appOutScriptsTxBody
+-- plutusOutScriptTxBody :: EraApp era c => TxBody era -> [PlutusWithLanguage]
+-- plutusOutScriptTxBody = mapMaybe appPlutusScriptWithLanguage . appOutScriptsTxBody
 
-data PlutusWithLanguage where
-  PlutusWithLanguage :: PlutusLanguage l => Plutus l -> PlutusWithLanguage
+-- data PlutusWithLanguage where
+--   PlutusWithLanguage :: PlutusLanguage l => Plutus l -> PlutusWithLanguage
 
-appPlutusScriptWithLanguage :: EraApp era c => Script era -> Maybe PlutusWithLanguage
-appPlutusScriptWithLanguage script =
-  case appScript script of
-    AppPlutusScript plutus -> Just $ PlutusWithLanguage plutus
-    _ -> Nothing
+-- appPlutusScriptWithLanguage :: EraApp era c => Script era -> Maybe PlutusWithLanguage
+-- appPlutusScriptWithLanguage script =
+--   case appScript script of
+--     AppPlutusScript plutus -> Just $ PlutusWithLanguage plutus
+--     _ -> Nothing

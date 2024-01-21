@@ -475,7 +475,6 @@ applyTickedNewEpochStateWithTxs fByron fShelleyOnwards =
     (\_ti nes -> fShelleyOnwards nes . getShelleyOnwardsTxs)
     (\_ti nes -> fShelleyOnwards nes . getShelleyOnwardsTxs)
 
--- TODO: figure out how to get access to intermediate UTxOs added in the block
 blockLanguageRefScriptsStats
   :: Crypto c
   => Ticked (ExtLedgerState (CardanoBlock c))
@@ -485,7 +484,11 @@ blockLanguageRefScriptsStats =
   applyTickedNewEpochStateWithTxs
     (\_ _ -> (Map.empty, Map.empty))
     ( \nes txs ->
-        let utxo = nes ^. nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL
+            -- We need to account for interblock dependency of transactions. The simplest
+            -- way to do that is just by adding all of the unspent outpus produced by the
+            -- block. This is safe to do, because we know that all transactions are valid.
+        let utxo =
+              (nes ^. nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL) <> foldMap utxoTx txs
             (usedRefScripts, allRefScripts) =
               unzip $ map (\tx -> refScriptsTxBody utxo (tx ^. bodyTxL)) txs
          in (calcStatsForAppScripts id usedRefScripts, calcStatsForAppScripts id allRefScripts)
