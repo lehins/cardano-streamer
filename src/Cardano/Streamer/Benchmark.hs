@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
@@ -15,6 +16,7 @@ import Cardano.Streamer.LedgerState (extLedgerStateEpochNo, tickedExtLedgerState
 import Cardano.Streamer.Time
 import Conduit
 import Criterion.Measurement (getCPUTime, getCycles, getTime, initializeTime)
+import Data.Aeson
 import Data.Fixed
 import Ouroboros.Consensus.Block
 import Ouroboros.Consensus.Cardano.Block
@@ -29,7 +31,10 @@ data Measure = Measure
   , measureCPUTime :: !Double
   , measureCycles :: !Word64
   }
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
+
+instance ToJSON Measure where
+  toJSON = genericToJSON (defaultOptions{fieldLabelModifier = drop 2})
 
 instance Display Measure where
   display = displayMeasure Nothing
@@ -149,6 +154,10 @@ data MeasureSummary = MeasureSummary
     msSum :: !Measure
   , msCount :: !Word64
   }
+  deriving (Generic)
+
+instance ToJSON MeasureSummary where
+  toJSON = genericToJSON (defaultOptions{fieldLabelModifier = drop 2})
 
 instance Display MeasureSummary where
   display ms = displayMeasureSummary (maxDepthMeasureSummary ms) 0 ms
@@ -189,6 +198,10 @@ data StatsReport = StatsReport
   , srBlock :: !MeasureSummary
   , srBlockDecode :: !MeasureSummary
   }
+  deriving (Generic)
+
+instance ToJSON StatsReport where
+  toJSON = genericToJSON (defaultOptions{fieldLabelModifier = drop 2})
 
 maxDepthStatsReport :: StatsReport -> Int
 maxDepthStatsReport StatsReport{..} =

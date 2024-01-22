@@ -1,6 +1,8 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -54,8 +56,9 @@ import Cardano.Ledger.Val
 import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
 import Cardano.Streamer.Ledger
+import Data.Aeson (ToJSON (..), defaultOptions, fieldLabelModifier, genericToJSON)
 import qualified Data.ByteString.Lazy as BSL
-import Data.Csv
+import Data.Csv (Field, ToNamedRecord (..), header, namedRecord, toField, (.=))
 import qualified Data.Map.Merge.Strict as Map
 import Ouroboros.Consensus.Byron.Ledger.Block
 import Ouroboros.Consensus.Byron.Ledger.Ledger
@@ -358,6 +361,10 @@ data BlockStats = BlockStats
   , esScriptsStatsRefScripts :: !(Map AppLanguage ScriptsStats)
   , esScriptsStatsAllRefScripts :: !(Map AppLanguage ScriptsStats)
   }
+  deriving (Generic)
+
+instance ToJSON BlockStats where
+  toJSON = genericToJSON (defaultOptions{fieldLabelModifier = drop 2})
 
 instance Semigroup BlockStats where
   es1 <> es2 =
@@ -389,6 +396,7 @@ instance Monoid BlockStats where
 newtype EpochStats = EpochStats
   { unEpochStats :: Map EpochNo BlockStats
   }
+  deriving (ToJSON)
 
 instance Semigroup EpochStats where
   es1 <> es2 =
@@ -484,9 +492,9 @@ blockLanguageRefScriptsStats =
   applyTickedNewEpochStateWithTxs
     (\_ _ -> (Map.empty, Map.empty))
     ( \nes txs ->
-            -- We need to account for interblock dependency of transactions. The simplest
-            -- way to do that is just by adding all of the unspent outpus produced by the
-            -- block. This is safe to do, because we know that all transactions are valid.
+        -- We need to account for interblock dependency of transactions. The simplest
+        -- way to do that is just by adding all of the unspent outpus produced by the
+        -- block. This is safe to do, because we know that all transactions are valid.
         let utxo =
               (nes ^. nesEsL . esLStateL . lsUTxOStateL . utxosUtxoL) <> foldMap utxoTx txs
             (usedRefScripts, allRefScripts) =

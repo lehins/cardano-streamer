@@ -38,6 +38,7 @@ library
                      , aeson
                      , async
                      , bytestring
+                     , base16-bytestring
                      , cardano-api
                      , cardano-addresses
                      , cardano-binary
@@ -68,6 +69,7 @@ library
                      , nothunks
                      , rio
                      , serialise
+                     , text
                      , transformers
                      , unliftio
                      , vector

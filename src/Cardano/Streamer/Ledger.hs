@@ -21,6 +21,8 @@ import Cardano.Ledger.Shelley.LedgerState (NewEpochState)
 import Cardano.Ledger.Shelley.Scripts
 import Cardano.Ledger.UTxO
 import Cardano.Streamer.Common
+import Data.Aeson
+import Data.Aeson.Types (toJSONKeyText)
 import qualified Data.ByteString.Short as SBS
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust)
@@ -48,6 +50,12 @@ appLanguageToText = \case
   AppNativeLanguage -> "Native"
   AppPlutusLanguage lang -> languageToText lang
 
+instance ToJSON AppLanguage where
+  toJSON = String . appLanguageToText
+
+instance ToJSONKey AppLanguage where
+  toJSONKey = toJSONKeyText appLanguageToText
+
 data AppScript where
   AppMultiSig :: MultiSig era -> AppScript
   AppTimelock :: Timelock era -> AppScript
@@ -59,12 +67,14 @@ appLanguage = \case
   AppTimelock{} -> AppNativeLanguage
   AppPlutusScript p -> AppPlutusLanguage (plutusLanguage p)
 
-appScriptSize :: AppScript -> Int
-appScriptSize = \case
-  AppMultiSig ns -> SBS.length $ getMemoRawBytes ns
-  AppTimelock ns -> SBS.length $ getMemoRawBytes ns
-  AppPlutusScript ps -> SBS.length (unPlutusBinary (plutusBinary ps))
+appScriptBytes :: AppScript -> ShortByteString
+appScriptBytes = \case
+  AppMultiSig ns -> getMemoRawBytes ns
+  AppTimelock ns -> getMemoRawBytes ns
+  AppPlutusScript ps -> unPlutusBinary (plutusBinary ps)
 
+appScriptSize :: AppScript -> Int
+appScriptSize = SBS.length . appScriptBytes
 class
   ( EraSegWits era
   , EraGov era

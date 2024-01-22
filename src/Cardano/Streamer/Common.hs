@@ -26,7 +26,7 @@ module Cardano.Streamer.Common (
   getDiskSnapshotFilePath,
   writeReport,
   writeCsv,
-  NamedCsv(..),
+  NamedCsv (..),
   writeRecord,
   writeNamedCsv,
   RIO,
@@ -44,8 +44,10 @@ import Cardano.Ledger.Hashes
 import Cardano.Ledger.Keys
 import Cardano.Streamer.Time
 import Control.Monad.Trans.Except
-import Data.Csv as Csv
 import Control.Tracer (Tracer (..))
+import qualified Data.Aeson as Aeson (ToJSON, ToJSONKey, encode)
+import Data.ByteString.Builder as BSL (lazyByteString)
+import Data.Csv as Csv
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import qualified Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
@@ -63,6 +65,7 @@ runRIO env = liftIO . flip runReaderT env
 
 deriving instance Display SlotNo
 deriving instance Display EpochNo
+deriving instance Aeson.ToJSONKey EpochNo
 
 instance Display DiskSnapshot where
   textDisplay = T.pack . snapshotToFileName
@@ -220,7 +223,11 @@ getDiskSnapshotFilePath diskSnapshot = do
   chainDir <- dsAppChainDir <$> ask
   pure $ chainDir </> "ledger" </> snapshotToFileName diskSnapshot
 
-writeReport :: (MonadReader (DbStreamerApp blk) m, MonadIO m, Display p) => String -> p -> m ()
+writeReport
+  :: (MonadReader (DbStreamerApp blk) m, MonadIO m, Aeson.ToJSON p, Display p)
+  => String
+  -> p
+  -> m ()
 writeReport name report = do
   let reportBuilder = display report
   logInfo reportBuilder
@@ -228,10 +235,19 @@ writeReport name report = do
   forM_ mOutDir $ \outDir -> do
     curTime <- getCurrentTime
     let time = formatTime defaultTimeLocale "%F-%H-%M-%S" curTime
-        fileName = name <> "-benchmark-" <> time <> ".txt"
-        filePath = outDir </> fileName
-    writeFileUtf8 filePath $ utf8BuilderToText reportBuilder
-    logInfo $ "Written " <> fromString name <> " report to: " <> fromString filePath
+        fileName = name <> "-report-" <> time
+        fileNameTxt = fileName <> ".txt"
+        fileNameJson = fileName <> ".json"
+    writeFileUtf8 (outDir </> fileNameTxt) $ utf8BuilderToText reportBuilder
+    writeFileUtf8Builder (outDir </> fileNameJson) $
+      Utf8Builder (BSL.lazyByteString $ Aeson.encode report)
+    logInfo $
+      "Written "
+        <> fromString fileNameTxt
+        <> " and "
+        <> fromString fileNameJson
+        <> " to: "
+        <> fromString outDir
 
 writeRecord :: (MonadReader (DbStreamerApp blk) m, MonadIO m, ToRecord a) => String -> [a] -> m ()
 writeRecord name = writeCsv name . encode

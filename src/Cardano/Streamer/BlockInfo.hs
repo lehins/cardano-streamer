@@ -1,6 +1,8 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -30,10 +32,15 @@ import Cardano.Protocol.TPraos.BHeader
 import Cardano.Streamer.Common
 import Cardano.Streamer.Ledger
 import Control.Monad.Trans.Fail.String (errorFail)
+import Data.Aeson
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Base16 as BS16
 import qualified Data.ByteString.Lazy as BSL
+import qualified Data.ByteString.Short as SBS
 import Data.Foldable (foldMap')
+import Data.List (intersperse)
 import qualified Data.Map.Strict as Map
+import qualified Data.Text.Encoding as T
 import qualified Data.Vector as V
 import Ouroboros.Consensus.Byron.Ledger.Block
 import Ouroboros.Consensus.Cardano.Block
@@ -357,23 +364,73 @@ toScriptsStats script =
    in ScriptsStats
         { lsTotalCount = 1
         , lsTotalSize = sz
-        , lsMaxSize = sz
+        , lsMaxScripts = MaxScript sz (appScriptBytes script)
         , lsMinSize = sz
         }
 
 data ScriptsStats = ScriptsStats
   { lsTotalCount :: !Int
   , lsTotalSize :: !Int
-  , lsMaxSize :: !Int
+  , lsMaxScripts :: !MaxScripts
   , lsMinSize :: !Int
   }
+  deriving (Generic)
+
+instance ToJSON ScriptsStats where
+  toJSON = genericToJSON (defaultOptions{fieldLabelModifier = drop 2})
+
+-- | By default this type will retain one maximum script. However, as soon as `MaxScripts`
+-- is encountered in an append, up to a 100 will be retained.
+data MaxScripts
+  = MaxScript !Int SBS.ShortByteString
+  | MaxScripts !(Map Int SBS.ShortByteString)
+  deriving (Eq, Ord, Show)
+
+instance ToJSON MaxScripts where
+  toJSON = \case
+    MaxScript n s -> toJSON (MaxScripts $ Map.singleton n s)
+    MaxScripts m -> toJSON $ Map.map (T.decodeLatin1 . BS16.encode . SBS.fromShort) m
+
+dropExcess :: Map Int ShortByteString -> MaxScripts
+dropExcess m
+  | n <= maxSizeCount = MaxScripts m
+  | m' : _ <- drop (maxSizeCount - n) $ iterate Map.deleteMin m = MaxScripts m'
+  | otherwise = error "Impossible: head on infinite loop"
+  where
+    n = Map.size m
+    maxSizeCount = 100
+
+instance Semigroup MaxScripts where
+  (<>) (MaxScripts m1) (MaxScripts m2) = dropExcess $ Map.union m1 m2
+  (<>) (MaxScript n1 s1) (MaxScripts m2) = dropExcess $ Map.insert n1 s1 m2
+  (<>) (MaxScripts m1) (MaxScript n2 s2) = dropExcess $ Map.alter (maybe (Just s2) Just) n2 m1
+  (<>) x1@(MaxScript n1 _) x2@(MaxScript n2 _)
+    | n1 < n2 = x2
+    | otherwise = x1
+
+instance Monoid MaxScripts where
+  mempty = MaxScript 0 ""
+
+instance Display MaxScripts where
+  display (MaxScript n _) = "MaxScript: " <> display n
+  display (MaxScripts m) = "MaxScripts<" <> display (Map.size m) <> ">" <> content
+    where
+      n = Map.size m
+      keys = Map.keys m
+      keysEnd = reverse $ take 3 $ reverse keys
+      inter xs = mconcat $ intersperse "," $ map display xs
+      content
+        | n == 0 = ""
+        | n < 7 = ": [" <> inter (map display keys) <> "]"
+        | otherwise =
+            display $ ": [" <> inter (take 3 keys) <> "..." <> inter keysEnd <> "]"
 
 instance Semigroup ScriptsStats where
   ls1 <> ls2 =
     ScriptsStats
       { lsTotalCount = lsTotalCount ls1 + lsTotalCount ls2
       , lsTotalSize = lsTotalSize ls1 + lsTotalSize ls2
-      , lsMaxSize = max (lsMaxSize ls1) (lsMaxSize ls2)
+      , lsMaxScripts = lsMaxScripts ls1 <> lsMaxScripts ls2
       , lsMinSize = min (lsMinSize ls1) (lsMinSize ls2)
       }
 
@@ -382,7 +439,7 @@ instance Monoid ScriptsStats where
     ScriptsStats
       { lsTotalCount = 0
       , lsTotalSize = 0
-      , lsMaxSize = minBound
+      , lsMaxScripts = mempty
       , lsMinSize = maxBound
       }
 
@@ -392,7 +449,7 @@ instance Display ScriptsStats where
       <> display lsTotalCount
       <> " Size: "
       <> display lsTotalSize
-      <> " MaxSize: "
-      <> display lsMaxSize
+      <> " MaxScripts: "
+      <> display lsMaxScripts
       <> " MinSize: "
       <> display lsMinSize
