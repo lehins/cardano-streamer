@@ -356,10 +356,10 @@ epochStatsToNamedCsv =
 
 data BlockStats = BlockStats
   { bsBlocksSize :: !Int
-  , bsScriptsStatsWits :: !(Map AppLanguage ScriptsStats)
-  , esScriptsStatsOutScripts :: !(Map AppLanguage ScriptsStats)
-  , esScriptsStatsRefScripts :: !(Map AppLanguage ScriptsStats)
-  , esScriptsStatsAllRefScripts :: !(Map AppLanguage ScriptsStats)
+  , bsScriptsStatsWits :: !(Map AppLanguage (ScriptsStats MaxScripts))
+  , esScriptsStatsOutScripts :: !(Map AppLanguage (ScriptsStats MaxScripts))
+  , esScriptsStatsRefScripts :: !(Map AppLanguage (ScriptsStats MaxScript))
+  , esScriptsStatsAllRefScripts :: !(Map AppLanguage (ScriptsStats MaxScript))
   }
   deriving (Generic)
 
@@ -487,7 +487,7 @@ blockLanguageRefScriptsStats
   :: Crypto c
   => Ticked (ExtLedgerState (CardanoBlock c))
   -> CardanoBlock c
-  -> (Map AppLanguage ScriptsStats, Map AppLanguage ScriptsStats)
+  -> (Map AppLanguage (ScriptsStats MaxScript), Map AppLanguage (ScriptsStats MaxScript))
 blockLanguageRefScriptsStats =
   applyTickedNewEpochStateWithTxs
     (\_ _ -> (Map.empty, Map.empty))

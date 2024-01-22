@@ -334,62 +334,84 @@ filterBlockWithdrawals creds =
         txs
 
 accScriptsStats
-  :: forall c
-   . Crypto c
+  :: forall ms c
+   . (ToMaxScript ms, Crypto c)
   => (forall era. EraApp era c => Tx era -> [AppScript])
   -> CardanoBlock c
-  -> Map AppLanguage ScriptsStats
+  -> Map AppLanguage (ScriptsStats ms)
 accScriptsStats fTx =
   applyBlockTxs (const Map.empty) (calcStatsForAppScripts fTx)
 
 calcStatsForAppScripts
-  :: (Foldable f, Foldable t)
+  :: (ToMaxScript ms, Foldable f, Foldable t)
   => (a -> f AppScript)
   -> t a
-  -> Map AppLanguage ScriptsStats
+  -> Map AppLanguage (ScriptsStats ms)
 calcStatsForAppScripts f = foldl' accStats Map.empty
   where
     accStats acc =
       Map.unionWith (<>) acc . Map.map (foldMap' toScriptsStats) . scriptsPerLanguage . f
 
-languageStatsTxWits :: forall c. Crypto c => CardanoBlock c -> Map AppLanguage ScriptsStats
+languageStatsTxWits
+  :: (ToMaxScript ms, Crypto c)
+  => CardanoBlock c
+  -> Map AppLanguage (ScriptsStats ms)
 languageStatsTxWits = accScriptsStats $ \tx -> Map.elems $ appScriptTxWits (tx ^. witsTxL)
 
-languageStatsOutsTxBody :: forall c. Crypto c => CardanoBlock c -> Map AppLanguage ScriptsStats
+languageStatsOutsTxBody
+  :: (ToMaxScript ms, Crypto c)
+  => CardanoBlock c
+  -> Map AppLanguage (ScriptsStats ms)
 languageStatsOutsTxBody = accScriptsStats $ \tx -> outScriptTxBody (tx ^. bodyTxL)
 
-toScriptsStats :: AppScript -> ScriptsStats
+toScriptsStats :: ToMaxScript ms => AppScript -> ScriptsStats ms
 toScriptsStats script =
   let sz = appScriptSize script
    in ScriptsStats
         { lsTotalCount = 1
         , lsTotalSize = sz
-        , lsMaxScripts = MaxScript sz (appScriptBytes script)
+        , lsMaxScripts = mkMaxScript script
         , lsMinSize = sz
         }
 
-data ScriptsStats = ScriptsStats
+data ScriptsStats ms = ScriptsStats
   { lsTotalCount :: !Int
   , lsTotalSize :: !Int
-  , lsMaxScripts :: !MaxScripts
+  , lsMaxScripts :: !ms
   , lsMinSize :: !Int
   }
   deriving (Generic)
 
-instance ToJSON ScriptsStats where
+instance ToJSON ms => ToJSON (ScriptsStats ms) where
   toJSON = genericToJSON (defaultOptions{fieldLabelModifier = drop 2})
 
--- | By default this type will retain one maximum script. However, as soon as `MaxScripts`
--- is encountered in an append, up to a 100 will be retained.
-data MaxScripts
-  = MaxScript !Int SBS.ShortByteString
-  | MaxScripts !(Map Int SBS.ShortByteString)
-  deriving (Eq, Ord, Show)
+class Monoid ms => ToMaxScript ms where
+  mkMaxScript :: AppScript -> ms
+
+newtype MaxScript = MaxScript SBS.ShortByteString
+  deriving (Eq, Ord, Show, Monoid)
+
+instance ToMaxScript MaxScript where
+  mkMaxScript = MaxScript . appScriptBytes
+
+instance ToJSON MaxScript where
+  toJSON (MaxScript s) = toJSON (MaxScripts $ Map.singleton (SBS.length s) s)
+
+instance Semigroup MaxScript where
+  (<>) x1@(MaxScript s1) x2@(MaxScript s2)
+    | SBS.length s1 < SBS.length s2 = x2
+    | otherwise = x1
+
+newtype MaxScripts = MaxScripts (Map Int SBS.ShortByteString)
+  deriving (Eq, Ord, Show, Monoid)
+
+instance ToMaxScript MaxScripts where
+  mkMaxScript script =
+    let sbs = appScriptBytes script
+     in MaxScripts $ Map.singleton (SBS.length sbs) sbs
 
 instance ToJSON MaxScripts where
-  toJSON = \case
-    MaxScript n s -> toJSON (MaxScripts $ Map.singleton n s)
-    MaxScripts m -> toJSON $ Map.map (T.decodeLatin1 . BS16.encode . SBS.fromShort) m
+  toJSON (MaxScripts m) = toJSON $ Map.map (T.decodeLatin1 . BS16.encode . SBS.fromShort) m
 
 dropExcess :: Map Int ShortByteString -> MaxScripts
 dropExcess m
@@ -402,17 +424,11 @@ dropExcess m
 
 instance Semigroup MaxScripts where
   (<>) (MaxScripts m1) (MaxScripts m2) = dropExcess $ Map.union m1 m2
-  (<>) (MaxScript n1 s1) (MaxScripts m2) = dropExcess $ Map.insert n1 s1 m2
-  (<>) (MaxScripts m1) (MaxScript n2 s2) = dropExcess $ Map.alter (maybe (Just s2) Just) n2 m1
-  (<>) x1@(MaxScript n1 _) x2@(MaxScript n2 _)
-    | n1 < n2 = x2
-    | otherwise = x1
 
-instance Monoid MaxScripts where
-  mempty = MaxScript 0 ""
+instance Display MaxScript where
+  display (MaxScript s) = "MaxScript: " <> display (SBS.length s)
 
 instance Display MaxScripts where
-  display (MaxScript n _) = "MaxScript: " <> display n
   display (MaxScripts m) = "MaxScripts<" <> display (Map.size m) <> ">" <> content
     where
       n = Map.size m
@@ -425,7 +441,7 @@ instance Display MaxScripts where
         | otherwise =
             display $ ": [" <> inter (take 3 keys) <> "..." <> inter keysEnd <> "]"
 
-instance Semigroup ScriptsStats where
+instance Semigroup ms => Semigroup (ScriptsStats ms) where
   ls1 <> ls2 =
     ScriptsStats
       { lsTotalCount = lsTotalCount ls1 + lsTotalCount ls2
@@ -434,7 +450,7 @@ instance Semigroup ScriptsStats where
       , lsMinSize = min (lsMinSize ls1) (lsMinSize ls2)
       }
 
-instance Monoid ScriptsStats where
+instance Monoid ms => Monoid (ScriptsStats ms) where
   mempty =
     ScriptsStats
       { lsTotalCount = 0
@@ -443,7 +459,7 @@ instance Monoid ScriptsStats where
       , lsMinSize = maxBound
       }
 
-instance Display ScriptsStats where
+instance Display ms => Display (ScriptsStats ms) where
   display ScriptsStats{..} =
     "Count: "
       <> display lsTotalCount
