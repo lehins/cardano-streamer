@@ -356,10 +356,10 @@ epochStatsToNamedCsv =
 
 data BlockStats = BlockStats
   { bsBlocksSize :: !Int
-  , bsScriptsStatsWits :: !(Map AppLanguage ScriptsStats)
-  , esScriptsStatsOutScripts :: !(Map AppLanguage ScriptsStats)
-  , esScriptsStatsRefScripts :: !(Map AppLanguage ScriptsStats)
-  , esScriptsStatsAllRefScripts :: !(Map AppLanguage ScriptsStats)
+  , bsScriptsStatsWits :: !(Map AppLanguage (ScriptsStats MaxScripts))
+  , esScriptsStatsOutScripts :: !(Map AppLanguage (ScriptsStats MaxScripts))
+  , esScriptsStatsRefScripts :: !(Map AppLanguage (ScriptsStats MaxScript))
+  , esScriptsStatsAllRefScripts :: !(Map AppLanguage (ScriptsStats MaxScript))
   }
   deriving (Generic)
 
@@ -414,7 +414,7 @@ toEpochStats EpochBlockStats{..} = EpochStats $ Map.singleton ebsEpochNo ebsBloc
 instance Display EpochStats where
   display EpochStats{..} =
     mconcat
-      [ "== " <> display epochNo <> ": ========\n" <> display blockStats
+      [ "\n== " <> display epochNo <> ": ========\n" <> display blockStats
       | (epochNo, blockStats) <- Map.toList unEpochStats
       ]
 
@@ -427,15 +427,15 @@ instance Display BlockStats where
         | (lang, langStats) <- Map.toList bsScriptsStatsWits
         ]
       <> mconcat
-        [ "\n  Output scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
+        [ "\n  Output scripts for " <> displayShow lang <> ":\n      " <> display langStats
         | (lang, langStats) <- Map.toList esScriptsStatsRefScripts
         ]
       <> mconcat
-        [ "\n  Evaluated reference scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
+        [ "\n  Evaluated reference scripts for " <> displayShow lang <> ":\n      " <> display langStats
         | (lang, langStats) <- Map.toList esScriptsStatsRefScripts
         ]
       <> mconcat
-        [ "\n  All reference scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
+        [ "\n  All reference scripts for " <> displayShow lang <> ":\n      " <> display langStats
         | (lang, langStats) <- Map.toList esScriptsStatsAllRefScripts
         ]
 
@@ -487,7 +487,7 @@ blockLanguageRefScriptsStats
   :: Crypto c
   => Ticked (ExtLedgerState (CardanoBlock c))
   -> CardanoBlock c
-  -> (Map AppLanguage ScriptsStats, Map AppLanguage ScriptsStats)
+  -> (Map AppLanguage (ScriptsStats MaxScript), Map AppLanguage (ScriptsStats MaxScript))
 blockLanguageRefScriptsStats =
   applyTickedNewEpochStateWithTxs
     (\_ _ -> (Map.empty, Map.empty))
