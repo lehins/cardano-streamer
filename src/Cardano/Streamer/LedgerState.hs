@@ -414,7 +414,7 @@ toEpochStats EpochBlockStats{..} = EpochStats $ Map.singleton ebsEpochNo ebsBloc
 instance Display EpochStats where
   display EpochStats{..} =
     mconcat
-      [ "== " <> display epochNo <> ": ========\n" <> display blockStats
+      [ "\n== " <> display epochNo <> ": ========\n" <> display blockStats
       | (epochNo, blockStats) <- Map.toList unEpochStats
       ]
 
@@ -427,15 +427,15 @@ instance Display BlockStats where
         | (lang, langStats) <- Map.toList bsScriptsStatsWits
         ]
       <> mconcat
-        [ "\n  Output scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
+        [ "\n  Output scripts for " <> displayShow lang <> ":\n      " <> display langStats
         | (lang, langStats) <- Map.toList esScriptsStatsRefScripts
         ]
       <> mconcat
-        [ "\n  Evaluated reference scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
+        [ "\n  Evaluated reference scripts for " <> displayShow lang <> ":\n      " <> display langStats
         | (lang, langStats) <- Map.toList esScriptsStatsRefScripts
         ]
       <> mconcat
-        [ "\n  All reference scripts for " <> displayShow lang <> ":\n      " <> display langStats <> "\n"
+        [ "\n  All reference scripts for " <> displayShow lang <> ":\n      " <> display langStats
         | (lang, langStats) <- Map.toList esScriptsStatsAllRefScripts
         ]
 
