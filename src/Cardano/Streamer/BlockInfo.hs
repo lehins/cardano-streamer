@@ -416,7 +416,7 @@ instance ToJSON MaxScripts where
 dropExcess :: Map Int ShortByteString -> MaxScripts
 dropExcess m
   | n <= maxSizeCount = MaxScripts m
-  | m' : _ <- drop (maxSizeCount - n) $ iterate Map.deleteMin m = MaxScripts m'
+  | m' : _ <- drop (n - maxSizeCount) $ iterate Map.deleteMin m = MaxScripts m'
   | otherwise = error "Impossible: head on infinite loop"
   where
     n = Map.size m
