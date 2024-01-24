@@ -12,9 +12,9 @@ repository cardano-haskell-packages
 
 index-state:
   -- Bump this if you need newer packages from Hackage
-  , hackage.haskell.org 2023-12-20T12:41:18Z
+  , hackage.haskell.org 2024-01-16T12:10:07Z
   -- Bump this if you need newer packages from CHaP
-  , cardano-haskell-packages 2023-12-15T13:03:00Z
+  , cardano-haskell-packages 2024-01-16T10:58:01Z
 
 packages: .
 
@@ -60,20 +60,28 @@ allow-newer:
 
 source-repository-package
   type: git
-  location: git@github.com:IntersectMBO/cardano-api.git
-  tag: eaad67667cd011664e5eeb8dc7c0f759f904c059
+  location: https://github.com/IntersectMBO/cardano-api
+  tag: ca98d4b670edd2508f8941cb2225413f9a6adedd
   subdir:
     cardano-api
 
 source-repository-package
   type: git
-  location: git@github.com:zliu41/ouroboros-consensus.git
-  tag: ffdc49fa891e180101ecfd8567ac844fe6c581eb
+  location: https://github.com/IntersectMBO/ouroboros-consensus
+  tag: 72b0ff7592eb10cbf6bdc5a8389e55d57191ebee
   subdir:
     ouroboros-consensus-cardano
     ouroboros-consensus-diffusion
     ouroboros-consensus-protocol
     ouroboros-consensus
+
+-- source-repository-package
+--   type: git
+--   location: https://github.com/IntersectMBO/ouroboros-network
+--   tag: 5618742c1e15ed1256fc62794eec7560040d8c0a
+--   subdir:
+--     ouroboros-network
+--     ouroboros-network-api
 
 -- source-repository-package
 --   type: git
@@ -88,7 +96,7 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/IntersectMBO/cardano-ledger
-  tag: 0765d327dfb01e1a8dfc34b7619294cd504474e7
+  tag: 33c0a26b753807bd683e109c73ecc8849de64a94
   subdir:
     eras/allegra/impl
     eras/alonzo/impl
@@ -106,8 +114,7 @@ source-repository-package
     libs/cardano-ledger-api
     libs/cardano-ledger-binary
     libs/cardano-ledger-core
-    libs/cardano-ledger-pretty
     libs/small-steps
     libs/small-steps-test
     libs/vector-map
-  --sha256: sha256-QpQmInlpagyDL2jUIAr6KWWED11oYwZ64vY2Hsm7viQ=
+    libs/cardano-protocol-tpraos

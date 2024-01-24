@@ -48,6 +48,7 @@ import Ouroboros.Consensus.Protocol.Praos (Praos)
 import Ouroboros.Consensus.Protocol.Praos.Header hiding (Header)
 import Ouroboros.Consensus.Protocol.TPraos (TPraos)
 import Ouroboros.Consensus.Shelley.Ledger.Block hiding (Header)
+import Ouroboros.Network.SizeInBytes (SizeInBytes)
 
 -- Import orphan type family instances for ShelleyProtocolHeader:
 
@@ -56,7 +57,7 @@ import Ouroboros.Consensus.Shelley.Protocol.TPraos ()
 
 data BlockWithInfo b = BlockWithInfo
   { biSlotNo :: !SlotNo
-  , biBlockSize :: !Word32
+  , biBlockSize :: !SizeInBytes
   , biBlockHeaderSize :: !Word16
   , biBlocksProcessed :: !Word64
   , biBlockComponent :: !b
