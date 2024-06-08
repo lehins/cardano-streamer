@@ -4,6 +4,8 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableSuperClasses #-}
 
 module Cardano.Streamer.Ledger where
 
@@ -128,7 +130,8 @@ instance Crypto c => EraApp (ConwayEra c) c where
     | tx ^. isValidTxL == IsValid True = txouts (tx ^. bodyTxL)
     | otherwise = collOuts (tx ^. bodyTxL)
 
-appTimelockScript :: (EraScript era, NativeScript era ~ Timelock era) => Script era -> Maybe AppScript
+appTimelockScript
+  :: (EraScript era, NativeScript era ~ Timelock era) => Script era -> Maybe AppScript
 appTimelockScript script = AppTimelock <$> getNativeScript script
 
 appPlutusScript :: AlonzoEraScript era => Script era -> Maybe AppScript

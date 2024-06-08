@@ -39,16 +39,16 @@ library
                      , async
                      , bytestring
                      , base16-bytestring
-                     , cardano-api
+                     , cardano-api == 8.46.0.0
                      , cardano-addresses
                      , cardano-binary
                      , cardano-crypto-class
                      , cardano-ledger-api
-                     , cardano-ledger-alonzo
+                     , cardano-ledger-alonzo >= 1.8
                      , cardano-ledger-allegra
                      , cardano-ledger-babbage
                      , cardano-ledger-byron
-                     , cardano-ledger-core >= 1.3
+                     , cardano-ledger-core >= 1.12
                      , cardano-ledger-shelley
                      , cardano-protocol-tpraos
                      , cardano-slotting
@@ -62,7 +62,7 @@ library
                      -- , ouroboros-consensus-byron
                      -- , ouroboros-consensus-shelley
                      , ouroboros-consensus-protocol
-                     , ouroboros-consensus-cardano
+                     , ouroboros-consensus-cardano == 0.16.0.0
                      , ouroboros-consensus-diffusion
                      , ouroboros-network-api
                      , io-classes
@@ -78,7 +78,6 @@ library
 
                      , cardano-ledger-binary
                      , cardano-ledger-babbage
-                     , ouroboros-consensus-protocol
 
   default-language:    Haskell2010
   ghc-options:         -Wall

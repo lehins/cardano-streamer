@@ -11,26 +11,15 @@
 module Cardano.Streamer.ProtocolInfo where
 
 import qualified Cardano.Api as Api
-import Cardano.Streamer.Benchmark
-import qualified RIO.Text as T
-import RIO.Time
-
--- import Cardano.Chain.Update (ApplicationName (..), SoftwareVersion (..))
 import Cardano.Ledger.BaseTypes (SlotNo (..))
+import Cardano.Streamer.Benchmark
 import Cardano.Streamer.Common
 import Codec.Serialise (Serialise (decode))
 import Control.Monad.Trans.Except
 import Ouroboros.Consensus.Block (BlockProtocol, ConvertRawHash, GetPrevHash)
 import Ouroboros.Consensus.Block.NestedContent (NestedCtxt)
-
--- import Ouroboros.Consensus.Byron.Node
 import Ouroboros.Consensus.Cardano.Block
-
--- import Ouroboros.Consensus.Cardano.Node (
---   ProtocolTransitionParamsShelleyBased (..),
---   protocolInfoCardano,
---  )
-import Ouroboros.Consensus.Config (configCodec, configSecurityParam, configStorage)
+import Ouroboros.Consensus.Config (configCodec, configStorage)
 import qualified Ouroboros.Consensus.Fragment.InFuture as InFuture
 import Ouroboros.Consensus.HeaderValidation (AnnTip)
 import Ouroboros.Consensus.Ledger.Extended (
@@ -38,23 +27,19 @@ import Ouroboros.Consensus.Ledger.Extended (
   decodeExtLedgerState,
   encodeExtLedgerState,
  )
-
--- import Ouroboros.Consensus.Mempool (mkOverrides, noOverridesMeasure)
 import qualified Ouroboros.Consensus.Node as Node
 import qualified Ouroboros.Consensus.Node.InitStorage as Node
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import Ouroboros.Consensus.Protocol.Abstract (ChainDepState)
-
--- import Ouroboros.Consensus.Shelley.Node.Praos
--- import Ouroboros.Consensus.Shelley.Node.TPraos
 import qualified Ouroboros.Consensus.Storage.ChainDB as ChainDB
-import Ouroboros.Consensus.Storage.ChainDB.Impl.Args (fromChainDbArgs)
+import Ouroboros.Consensus.Storage.ChainDB.Impl.Args (
+  cdbImmDbArgs,
+  completeChainDbArgs,
+  updateTracer,
+ )
+import Ouroboros.Consensus.Storage.ChainDB.Impl.LgrDB (lgrHasFS)
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import Ouroboros.Consensus.Storage.ImmutableDB.Impl (ImmutableDbArgs)
-import Ouroboros.Consensus.Storage.LedgerDB.DiskPolicy (
-  SnapshotInterval (DefaultSnapshotInterval),
-  defaultDiskPolicy,
- )
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (
   DiskSnapshot (..),
   readSnapshot,
@@ -71,6 +56,8 @@ import qualified Ouroboros.Consensus.Storage.VolatileDB as VolatileDB
 import Ouroboros.Consensus.Util.CBOR (ReadIncrementalErr)
 import Ouroboros.Consensus.Util.ResourceRegistry (runWithTempRegistry)
 import Ouroboros.Network.Block (HeaderHash)
+import qualified RIO.Text as T
+import RIO.Time
 
 newtype NodeConfigError = NodeConfigError {unNodeConfigError :: Text}
   deriving (Show, Eq)
@@ -107,23 +94,33 @@ mkDbArgs
   -> m (ChainDB.ChainDbArgs Identity IO blk)
 mkDbArgs dbDir ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
   registry <- view registryL
+  dbTracer <- mkTracer (Just "Trace") LevelDebug
   let
     chainDbArgs =
-      Node.mkChainDbArgs registry InFuture.dontCheck pInfoConfig pInfoInitLedger chunkInfo defArgs
-  dbTracer <- mkTracer (Just "Trace") LevelDebug
+      updateTracer dbTracer $
+        completeChainDbArgs
+          registry
+          InFuture.dontCheck
+          pInfoConfig
+          pInfoInitLedger
+          chunkInfo
+          (const True)
+          (Node.stdMkChainDbHasFS dbDir)
+          ChainDB.defaultArgs
   logDebug $ "Preparing to open the database: " <> displayShow dbDir
   pure $
     chainDbArgs
-      { ChainDB.cdbTracer = dbTracer
-      , ChainDB.cdbImmutableDbValidation = ImmutableDB.ValidateMostRecentChunk
-      , ChainDB.cdbVolatileDbValidation = VolatileDB.NoValidation
+      { ChainDB.cdbImmDbArgs =
+          (ChainDB.cdbImmDbArgs chainDbArgs)
+            { ImmutableDB.immValidationPolicy = ImmutableDB.ValidateAllChunks
+            }
+      , ChainDB.cdbVolDbArgs =
+          (ChainDB.cdbVolDbArgs chainDbArgs)
+            { VolatileDB.volValidationPolicy = VolatileDB.NoValidation
+            }
       }
   where
     chunkInfo = Node.nodeImmutableDbChunkInfo (configStorage pInfoConfig)
-    kParam = configSecurityParam pInfoConfig
-    diskPolicy = defaultDiskPolicy kParam DefaultSnapshotInterval
-    defArgs =
-      ChainDB.defaultArgs (Node.stdMkChainDbHasFS dbDir) diskPolicy
 
 withImmutableDb
   :: ( MonadUnliftIO m
@@ -160,7 +157,7 @@ writeLedgerState
   -> ExtLedgerState blk
   -> m ()
 writeLedgerState diskSnapshot ledgerState = do
-  ledgerDbFS <- ChainDB.cdbHasFSLgrDB . dsAppChainDbArgs <$> ask
+  ledgerDbFS <- lgrHasFS . ChainDB.cdbLgrDbArgs . dsAppChainDbArgs <$> ask
   ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
   let
     extLedgerStateEncoder =
@@ -180,7 +177,7 @@ readInitLedgerState
 readInitLedgerState diskSnapshot = do
   snapshotFilePath <- getDiskSnapshotFilePath diskSnapshot
   logInfo $ "Reading initial ledger state: " <> display (T.pack snapshotFilePath)
-  ledgerDbFS <- ChainDB.cdbHasFSLgrDB . dsAppChainDbArgs <$> ask
+  ledgerDbFS <- lgrHasFS . ChainDB.cdbLgrDbArgs . dsAppChainDbArgs <$> ask
   ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
   let
     extLedgerStateDecoder =
@@ -214,7 +211,7 @@ runDbStreamerApp action = do
   appConf <- ask
   protocolInfo <- readProtocolInfoCardano (appConfFilePath appConf)
   dbArgs <- mkDbArgs (appConfChainDir appConf) protocolInfo
-  let (iDbArgs, _, _, _) = fromChainDbArgs dbArgs
+  let iDbArgs = cdbImmDbArgs dbArgs
   withImmutableDb iDbArgs $ \iDb -> do
     startTime <- getCurrentTime
     let app =

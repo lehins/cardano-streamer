@@ -542,7 +542,7 @@ computeRewards creds initLedgerState = do
     --   `fuseBoth` lastC
     -- pure $ fromMaybe [] rs
 
-    emptyRewardsState = RewardsState 0 mempty mempty
+    emptyRewardsState = RewardsState (EpochNo 0) mempty mempty
 
 replayBenchmarkReport
   :: ExtLedgerState (CardanoBlock StandardCrypto)

@@ -263,7 +263,7 @@ detectNewRewards
   -> m (EpochNo, Maybe (Map (Credential 'Staking c) Coin, Map (Credential 'Staking c) Coin))
 detectNewRewards creds prevEpochNo prevRewards epochWithdrawals extLedgerState = do
   let (ti, curEpochNo) = tickedExtLedgerStateEpochNo extLedgerState
-  unless (curEpochNo == prevEpochNo || curEpochNo == prevEpochNo + 1) $
+  unless (curEpochNo == prevEpochNo || curEpochNo == succ prevEpochNo) $
     logWarn $
       "Current epoch number: "
         <> displayShow curEpochNo

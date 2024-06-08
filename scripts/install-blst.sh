@@ -14,7 +14,8 @@ git reset --hard $BLST_REF
 sudo mkdir -p ${PREFIX}/lib/pkgconfig
 sudo mkdir -p ${PREFIX}/include/blst
 sudo cp bindings/{blst.h,blst_aux.h} ${PREFIX}/include/blst/
-sudo cp -f libblst.{a,dll,so,dylib} ${PREFIX}/lib/
+sudo cp -f libblst.a ${PREFIX}/lib/
+#sudo cp -f libblst.{a,dll,so,dylib} ${PREFIX}/lib/
 
 cat <<EOF > libblst.pc
 prefix=${PREFIX}

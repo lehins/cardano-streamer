@@ -329,7 +329,7 @@ filterBlockWithdrawals creds =
     Map.unionsWith (<+>) $
       map
         ( \tx ->
-            let wdrls = Map.mapKeys getRwdCred $ unWithdrawals (tx ^. bodyTxL . withdrawalsTxBodyL)
+            let wdrls = Map.mapKeys raCredential $ unWithdrawals (tx ^. bodyTxL . withdrawalsTxBodyL)
              in wdrls `Map.restrictKeys` creds
         )
         txs

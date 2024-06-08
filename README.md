@@ -26,3 +26,11 @@ $ sudo apt install pkg-config autoconf automake libtool libsodium-dev zlib1g-dev
 $ ./scripts/install-blst.sh
 $ ./scripts/install-secp256k1.sh
 ```
+
+* OpenSUSE
+
+```
+$ sudo zypper in pkg-config autoconf automake libtool libsodium-devel zlib-devel
+$ ./scripts/install-blst.sh
+$ ./scripts/install-secp256k1.sh
+```
