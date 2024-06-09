@@ -583,7 +583,8 @@ runApp Opts{..} = do
               }
       void $ runRIO appConf $ runDbStreamerApp $ \initLedger -> do
         app <- ask
-        runRIO (app{dsAppOutDir = oOutDir}) $
+        runRIO (app{dsAppOutDir = oOutDir}) $ do
+          logInfo $ "Starting to " <> display oCommand
           case oCommand of
             Replay -> void $ replayChain initLedger
             Benchmark -> void $ replayBenchmarkReport initLedger

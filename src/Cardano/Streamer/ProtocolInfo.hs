@@ -108,17 +108,7 @@ mkDbArgs dbDir ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
           (Node.stdMkChainDbHasFS dbDir)
           ChainDB.defaultArgs
   logDebug $ "Preparing to open the database: " <> displayShow dbDir
-  pure $
-    chainDbArgs
-      { ChainDB.cdbImmDbArgs =
-          (ChainDB.cdbImmDbArgs chainDbArgs)
-            { ImmutableDB.immValidationPolicy = ImmutableDB.ValidateAllChunks
-            }
-      , ChainDB.cdbVolDbArgs =
-          (ChainDB.cdbVolDbArgs chainDbArgs)
-            { VolatileDB.volValidationPolicy = VolatileDB.NoValidation
-            }
-      }
+  pure chainDbArgs
   where
     chunkInfo = Node.nodeImmutableDbChunkInfo (configStorage pInfoConfig)
 
@@ -212,7 +202,9 @@ runDbStreamerApp action = do
   protocolInfo <- readProtocolInfoCardano (appConfFilePath appConf)
   dbArgs <- mkDbArgs (appConfChainDir appConf) protocolInfo
   let iDbArgs = cdbImmDbArgs dbArgs
+  logInfo "withImmutableDb prepare"
   withImmutableDb iDbArgs $ \iDb -> do
+    logInfo "withImmutableDb start"
     startTime <- getCurrentTime
     let app =
           DbStreamerApp
@@ -228,61 +220,7 @@ runDbStreamerApp action = do
             , dsAppValidationMode = appConfValidationMode appConf
             , dsAppStartTime = startTime
             }
-    runRIO app (getInitLedgerState (appConfReadDiskSnapshot appConf) >>= action)
+    res <- runRIO app (getInitLedgerState (appConfReadDiskSnapshot appConf) >>= action)
+    logInfo "withImmutableDb end"
+    pure res
 
------------
-
--- mkProtocolInfoCardano
---   :: Api.GenesisConfig
---   -> ProtocolInfo (HardForkBlock (CardanoEras StandardCrypto))
--- mkProtocolInfoCardano (Api.GenesisCardano dnc byronGenesis shelleyGenesis alonzoGenesis conwayGenesis) =
---   protocolInfoCardano
---     ProtocolParamsByron
---       { byronGenesis = byronGenesis
---       , byronPbftSignatureThreshold = PBftSignatureThreshold <$> Api.ncPBftSignatureThreshold dnc
---       , byronProtocolVersion = Api.ncByronProtocolVersion dnc
---       , byronSoftwareVersion = byronSoftwareVersion
---       , byronLeaderCredentials = Nothing
---       , byronMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
---       }
---     ProtocolParamsShelleyBased
---       { shelleyBasedGenesis = Api.scConfig shelleyGenesis
---       , shelleyBasedInitialNonce = Api.shelleyPraosNonce shelleyGenesis
---       , shelleyBasedLeaderCredentials = []
---       }
---     ProtocolParamsShelley
---       { shelleyProtVer = ProtVer (natVersion @3) 0
---       , shelleyMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
---       }
---     ProtocolParamsAllegra
---       { allegraProtVer = ProtVer (natVersion @4) 0
---       , allegraMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
---       }
---     ProtocolParamsMary
---       { maryProtVer = ProtVer (natVersion @5) 0
---       , maryMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
---       }
---     ProtocolParamsAlonzo
---       { alonzoProtVer = ProtVer (natVersion @7) 0
---       , alonzoMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
---       }
---     ProtocolParamsBabbage
---       { babbageProtVer = ProtVer (natVersion @9) 0
---       , babbageMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
---       }
---     ProtocolParamsConway
---       { conwayProtVer = ProtVer (natVersion @10) 0
---       , conwayMaxTxCapacityOverrides = mkOverrides noOverridesMeasure
---       }
---     (Api.ncByronToShelley dnc)
---     (Api.ncShelleyToAllegra dnc)
---     (Api.ncAllegraToMary dnc)
---     (ProtocolTransitionParamsShelleyBased alonzoGenesis (Api.ncMaryToAlonzo dnc))
---     (ProtocolTransitionParamsShelleyBased () (Api.ncAlonzoToBabbage dnc))
---     (ProtocolTransitionParamsShelleyBased conwayGenesis (Api.ncBabbageToConway dnc))
---   where
---     byronSoftwareVersion =
---       SoftwareVersion
---         { svAppName = ApplicationName "cardano-sl"
---         , svNumber = 1
---         }

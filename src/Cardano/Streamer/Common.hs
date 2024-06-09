@@ -163,7 +163,12 @@ data Command
   | ComputeRewards (NonEmpty (Credential 'Staking StandardCrypto))
   deriving (Show)
 
---    Set
+instance Display Command where
+  display = \case
+    Replay -> "Replay"
+    Benchmark -> "Benchmark"
+    Stats -> "Statistics"
+    ComputeRewards _xs -> "Rewards" -- for: " <> intersperce "," (map displayShow xs)
 
 data Opts = Opts
   { oChainDir :: FilePath
