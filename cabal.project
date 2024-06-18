@@ -12,9 +12,9 @@ repository cardano-haskell-packages
 
 index-state:
   -- Bump this if you need newer packages from Hackage
-  , hackage.haskell.org 2024-06-06T11:25:56Z
+  , hackage.haskell.org 2024-06-13T08:49:27Z
   -- Bump this if you need newer packages from CHaP
-  , cardano-haskell-packages 2024-06-06T03:50:29Z
+  , cardano-haskell-packages 2024-06-18T12:42:43Z
 
 packages: .
 
@@ -43,22 +43,24 @@ allow-newer:
   *:aeson
 
 
--- source-repository-package
---   type: git
---   location: https://github.com/IntersectMBO/cardano-api
---   tag: ca98d4b670edd2508f8941cb2225413f9a6adedd
---   subdir:
---     cardano-api
+source-repository-package
+  type: git
+  location: https://github.com/IntersectMBO/cardano-api
+  tag: 15be4a2adf9dc4157385612466bf2b3218f9702e
+  --sha256: sha256-WoAG/+Pa6TyQBBV7u0o/inFUw4mBe9eD0zUz7u4RPhY=
+  subdir:
+    cardano-api
 
--- source-repository-package
---   type: git
---   location: https://github.com/IntersectMBO/ouroboros-consensus
---   tag: 2a5f6120d292d599e22017de49ab4491ab89eb09
---   subdir:
---     ouroboros-consensus-cardano
---     ouroboros-consensus-diffusion
---     ouroboros-consensus-protocol
---     ouroboros-consensus
+source-repository-package
+  type: git
+  location: https://github.com/IntersectMBO/ouroboros-consensus
+  tag: c0917541f82c6987e26b3c89523345f276c388b8
+  --sha256: sha256-nqKLxAOJ8hOHgRkQ6YLc+kAPbXdyoosu9W0bq7VmZbU=
+  subdir:
+    ouroboros-consensus
+    ouroboros-consensus-cardano
+    ouroboros-consensus-diffusion
+    ouroboros-consensus-protocol
 
 -- source-repository-package
 --   type: git
@@ -81,25 +83,32 @@ allow-newer:
 -- source-repository-package
 --   type: git
 --   location: https://github.com/IntersectMBO/cardano-ledger
---   tag: 9c790f0e8cc7d4b7f8aebea1ef3faf0190be59af
+--   tag: e21c14197d2b4428857264347f127277728a8592
+--   --sha256: sha256-x635PhRfdK3+mE7ftbD3COCyMmqk7gmA6HAp1rgIaTw=
 --   subdir:
 --     eras/allegra/impl
 --     eras/alonzo/impl
 --     eras/alonzo/test-suite
 --     eras/babbage/impl
 --     eras/babbage/test-suite
---     eras/byron/ledger/impl
 --     eras/conway/impl
 --     eras/conway/test-suite
 --     eras/mary/impl
 --     eras/shelley/impl
 --     eras/shelley/test-suite
 --     eras/shelley-ma/test-suite
---     libs/cardano-data
 --     libs/cardano-ledger-api
---     libs/cardano-ledger-binary
 --     libs/cardano-ledger-core
---     libs/small-steps
---     libs/small-steps-test
---     libs/vector-map
+--     libs/cardano-ledger-binary
 --     libs/cardano-protocol-tpraos
+--     libs/non-integral
+--     libs/small-steps
+--     libs/cardano-data
+--     libs/set-algebra
+--     libs/vector-map
+--     eras/byron/chain/executable-spec
+--     eras/byron/ledger/executable-spec
+--     eras/byron/ledger/impl
+--     eras/byron/ledger/impl/test
+--     eras/byron/crypto
+--     eras/byron/crypto/test

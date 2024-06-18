@@ -39,7 +39,7 @@ library
                      , async
                      , bytestring
                      , base16-bytestring
-                     , cardano-api == 8.46.0.0
+                     , cardano-api >= 8.46
                      , cardano-addresses
                      , cardano-binary
                      , cardano-crypto-class
@@ -62,7 +62,7 @@ library
                      -- , ouroboros-consensus-byron
                      -- , ouroboros-consensus-shelley
                      , ouroboros-consensus-protocol
-                     , ouroboros-consensus-cardano == 0.16.0.0
+                     , ouroboros-consensus-cardano >= 0.16
                      , ouroboros-consensus-diffusion
                      , ouroboros-network-api
                      , io-classes
