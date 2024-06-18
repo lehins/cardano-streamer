@@ -2,6 +2,7 @@
 
 module CLI where
 
+import Cardano.Slotting.Slot
 import Cardano.Streamer.Common
 import qualified Data.List.NonEmpty as NE
 import Options.Applicative
@@ -100,6 +101,22 @@ optsParser =
                     ]
                 )
           )
+      )
+    <*> many
+      ( SlotNo
+          <$> option
+            auto
+            ( long "write-block"
+                <> short 'b'
+                <> help
+                  ( mconcat
+                      [ "Write a block with this slot number. "
+                      , "If there is no block at that slot number it will be skipped. "
+                      , "At least for now. Also currently transactions and the ledger "
+                      , "state will be written as well, but that will change in the future."
+                      ]
+                  )
+            )
       )
     <*> ( ( Just
               <$> option

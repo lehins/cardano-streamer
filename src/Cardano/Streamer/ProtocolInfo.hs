@@ -52,7 +52,7 @@ import Ouroboros.Consensus.Storage.Serialisation (
   HasBinaryBlockInfo,
   ReconstructNestedCtxt,
  )
-import qualified Ouroboros.Consensus.Storage.VolatileDB as VolatileDB
+-- import qualified Ouroboros.Consensus.Storage.VolatileDB as VolatileDB
 import Ouroboros.Consensus.Util.CBOR (ReadIncrementalErr)
 import Ouroboros.Consensus.Util.ResourceRegistry (runWithTempRegistry)
 import Ouroboros.Network.Block (HeaderHash)
@@ -206,6 +206,7 @@ runDbStreamerApp action = do
   withImmutableDb iDbArgs $ \iDb -> do
     logInfo "withImmutableDb start"
     startTime <- getCurrentTime
+    writeBlocksRef <- newIORef (appConfWriteBlocksSlotNoSet appConf)
     let app =
           DbStreamerApp
             { dsAppLogFunc = appConfLogFunc appConf
@@ -216,7 +217,8 @@ runDbStreamerApp action = do
             , dsAppIDb = iDb
             , dsAppOutDir = Nothing
             , dsAppStopSlotNo = SlotNo <$> appConfStopSlotNumber appConf
-            , dbAppWriteDiskSnapshots = appConfWriteDiskSnapshots appConf
+            , dsAppWriteDiskSnapshots = appConfWriteDiskSnapshots appConf
+            , dsAppWriteBlocks = writeBlocksRef
             , dsAppValidationMode = appConfValidationMode appConf
             , dsAppStartTime = startTime
             }

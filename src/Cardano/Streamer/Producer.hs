@@ -117,7 +117,7 @@ sourceBlocksWithAccState blockComponent initState acc0 action = do
           case annTipSlotNo <$> headerStateTip (headerState initState) of
             Origin -> ds
             At (SlotNo curSlotNo) -> List.filter ((> curSlotNo) . dsNumber) ds
-  diskSnapshotsToWrite <- prepareDiskSnapshots . dbAppWriteDiskSnapshots <$> ask
+  diskSnapshotsToWrite <- prepareDiskSnapshots . dsAppWriteDiskSnapshots <$> ask
   sourceBlocks blockComponent withOriginAnnTip
     .| loopWithSnapshotWriting initState (acc0, diskSnapshotsToWrite)
   where
@@ -287,6 +287,7 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
           logStickyStatus
           logError $ "Received an exception: " <> displayShow exc
           reportValidationError exc slotNo block prevLedger
+  blocksToWriteSlotSet <- readIORef (dsAppWriteBlocks app)
   (extLedgerState, b) <-
     flip withException reportException $ do
       a <- inspectTickState lrTickResult slotNo
@@ -301,7 +302,11 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
               ReValidation ->
                 pure $ lrResult $ reapplyBlockLedgerResult ledgerCfg block (lrResult lrTick)
               _ -> error "NoValidation is not yet implemeted"
-      inspectBlockState lrTickResult applyBlockGranular a
+      res <- inspectBlockState lrTickResult applyBlockGranular a
+      when (slotNo `Set.member` blocksToWriteSlotSet) $ do
+        writeIORef (dsAppWriteBlocks app) (Set.delete slotNo blocksToWriteSlotSet)
+        writeBlockWithState slotNo block prevLedger
+      pure res
   when (biBlocksProcessed bwi `mod` 20 == 0) logStickyStatus
   extLedgerState `seq` pure (extLedgerState, b)
 
@@ -317,6 +322,18 @@ reportValidationError errorMessage slotNo block ledgerState = do
       blockHashHex = hashToTextAsHex (extractHash (rawBlockHash rawBlock))
   logError $
     "Encountered an error while validating a block: " <> display blockHashHex
+  writeBlockWithState slotNo block ledgerState
+  throwString $ show errorMessage
+
+writeBlockWithState
+  :: (MonadReader (DbStreamerApp blk) m, MonadIO m, Crypto c)
+  => SlotNo
+  -> CardanoBlock c
+  -> ExtLedgerState (CardanoBlock c)
+  -> m ()
+writeBlockWithState slotNo block ledgerState = do
+  let rawBlock = getRawBlock block
+      blockHashHex = hashToTextAsHex (extractHash (rawBlockHash rawBlock))
   mOutDir <- dsAppOutDir <$> ask
   forM_ mOutDir $ \outDir -> do
     let prefix = outDir </> show (unSlotNo slotNo) <> "_" <> T.unpack blockHashHex
@@ -331,7 +348,6 @@ reportValidationError errorMessage slotNo block ledgerState = do
       (liftIO . print)
       (zipWithM_ (\ix -> writeTx (mkTxFileName ix)) [0 :: Int ..])
       block
-  throwString $ show errorMessage
 
 advanceBlock
   :: ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto))
@@ -578,6 +594,7 @@ runApp Opts{..} = do
                   DiskSnapshot <$> oWriteSnapShotSlotNumbers <*> pure oSnapShotSuffix
               , appConfStopSlotNumber = oStopSlotNumber
               , appConfValidationMode = oValidationMode
+              , appConfWriteBlocksSlotNoSet = Set.fromList oWriteBlocks
               , appConfLogFunc = logFunc
               , appConfRegistry = registry
               }

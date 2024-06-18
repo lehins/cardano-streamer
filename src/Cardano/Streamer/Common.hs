@@ -120,7 +120,8 @@ data DbStreamerApp blk = DbStreamerApp
   -- ^ Output directory where to write files
   , dsAppStopSlotNo :: !(Maybe SlotNo)
   -- ^ Last slot number to execute
-  , dbAppWriteDiskSnapshots :: ![DiskSnapshot]
+  , dsAppWriteDiskSnapshots :: ![DiskSnapshot]
+  , dsAppWriteBlocks :: !(IORef (Set SlotNo))
   , dsAppValidationMode :: !ValidationMode
   , dsAppStartTime :: !UTCTime
   }
@@ -144,6 +145,7 @@ data AppConfig = AppConfig
   -- ^ Config file path
   , appConfReadDiskSnapshot :: !(Maybe DiskSnapshot)
   , appConfWriteDiskSnapshots :: ![DiskSnapshot]
+  , appConfWriteBlocksSlotNoSet :: !(Set SlotNo)
   , appConfStopSlotNumber :: !(Maybe Word64)
   , appConfValidationMode :: !ValidationMode
   , appConfLogFunc :: !LogFunc
@@ -183,6 +185,12 @@ data Opts = Opts
   -- ^ Slot number expected for the snapshot to read from.
   , oWriteSnapShotSlotNumbers :: [Word64]
   -- ^ Slot numbers for creating snapshots
+  , oWriteBlocks :: [SlotNo]
+  -- ^ Slot numbers for blocks that we need to write to file. If a slot has no block this will cause a failure.
+  -- TODO: Improve:
+  -- , oWriteBlocks :: [Either SlotNo BlockHash]
+  -- , oWriteBlocksTxs :: Bool
+  -- , oWriteBlocksLedgerState :: Bool
   , oStopSlotNumber :: Maybe Word64
   -- ^ Stope replaying the chain once reaching this slot number. When no slot number is
   -- supplied replay will stop only at the end of the immutable chain.
