@@ -101,6 +101,8 @@ executable cstreamer
                       -rtsopts
                       -with-rtsopts=-N1
   build-depends:      base
+                    , cardano-crypto-class
+                    , cardano-ledger-core
                     , cardano-streamer
                     , cardano-slotting
                     , ouroboros-consensus

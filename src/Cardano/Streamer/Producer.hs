@@ -287,7 +287,7 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
           logStickyStatus
           logError $ "Received an exception: " <> displayShow exc
           reportValidationError exc slotNo block prevLedger
-  blocksToWriteSlotSet <- readIORef (dsAppWriteBlocks app)
+  (blocksToWriteSlotSet, blocksToWriteBlockHashSet) <- readIORef (dsAppWriteBlocks app)
   (extLedgerState, b) <-
     flip withException reportException $ do
       a <- inspectTickState lrTickResult slotNo
@@ -304,7 +304,14 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
               _ -> error "NoValidation is not yet implemeted"
       res <- inspectBlockState lrTickResult applyBlockGranular a
       when (slotNo `Set.member` blocksToWriteSlotSet) $ do
-        writeIORef (dsAppWriteBlocks app) (Set.delete slotNo blocksToWriteSlotSet)
+        atomicModifyIORef' (dsAppWriteBlocks app) $
+          \(slotNoSet, blockHashSet) -> ((Set.delete slotNo slotNoSet, blockHashSet), ())
+        writeBlockWithState slotNo block prevLedger
+      -- TODO: avoid redundant hash calculation
+      let blockHash' = rawBlockHash (getRawBlock block)
+      when (not (Set.null blocksToWriteBlockHashSet) && blockHash' `Set.member` blocksToWriteBlockHashSet) $ do
+        atomicModifyIORef' (dsAppWriteBlocks app) $ \(slotNoSet, blockHashSet) ->
+          ((slotNoSet, Set.delete blockHash' blockHashSet), ())
         writeBlockWithState slotNo block prevLedger
       pure res
   when (biBlocksProcessed bwi `mod` 20 == 0) logStickyStatus
@@ -319,9 +326,8 @@ reportValidationError
   -> m d
 reportValidationError errorMessage slotNo block ledgerState = do
   let rawBlock = getRawBlock block
-      blockHashHex = hashToTextAsHex (extractHash (rawBlockHash rawBlock))
   logError $
-    "Encountered an error while validating a block: " <> display blockHashHex
+    "Encountered an error while validating a block: " <> display (rawBlockHash rawBlock)
   writeBlockWithState slotNo block ledgerState
   throwString $ show errorMessage
 
@@ -584,7 +590,11 @@ runApp Opts{..} = do
   logOpts <- logOptionsHandle stdout oVerbose
   withLogFunc (setLogMinLevel oLogLevel $ setLogUseLoc oDebug logOpts) $ \logFunc -> do
     withRegistry $ \registry -> do
-      let appConf =
+      let (writeBlockSlots, writeBlockHashes) =
+            bimap Set.fromList Set.fromList $
+              partitionEithers $
+                map unBlockHashOrSlotNo oWriteBlocks
+          appConf =
             AppConfig
               { appConfChainDir = oChainDir
               , appConfFilePath = oConfigFilePath
@@ -594,11 +604,21 @@ runApp Opts{..} = do
                   DiskSnapshot <$> oWriteSnapShotSlotNumbers <*> pure oSnapShotSuffix
               , appConfStopSlotNumber = oStopSlotNumber
               , appConfValidationMode = oValidationMode
-              , appConfWriteBlocksSlotNoSet = Set.fromList oWriteBlocks
+              , appConfWriteBlocksSlotNoSet = writeBlockSlots
+              , appConfWriteBlocksBlockHashSet = writeBlockHashes
               , appConfLogFunc = logFunc
               , appConfRegistry = registry
               }
       void $ runRIO appConf $ runDbStreamerApp $ \initLedger -> do
+        unless (null writeBlockSlots) $
+          logInfo $
+            "Will try to dump blocks if they exist at slots: "
+              <> mconcat (intersperse "," (map display (Set.toList writeBlockSlots)))
+        unless (null writeBlockHashes) $
+          logInfo $
+            "Will try to dump blocks with hashes if they exist: "
+              <> mconcat
+                (intersperse "," (map display (Set.toList writeBlockHashes)))
         app <- ask
         runRIO (app{dsAppOutDir = oOutDir}) $ do
           logInfo $ "Starting to " <> display oCommand

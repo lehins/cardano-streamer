@@ -206,7 +206,7 @@ runDbStreamerApp action = do
   withImmutableDb iDbArgs $ \iDb -> do
     logInfo "withImmutableDb start"
     startTime <- getCurrentTime
-    writeBlocksRef <- newIORef (appConfWriteBlocksSlotNoSet appConf)
+    writeBlocksRef <- newIORef (appConfWriteBlocksSlotNoSet appConf, appConfWriteBlocksBlockHashSet appConf)
     let app =
           DbStreamerApp
             { dsAppLogFunc = appConfLogFunc appConf

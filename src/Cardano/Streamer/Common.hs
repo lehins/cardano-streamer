@@ -14,6 +14,7 @@ module Cardano.Streamer.Common (
   AppConfig (..),
   Opts (..),
   Command (..),
+  BlockHashOrSlotNo (..),
   throwExceptT,
   throwShowExceptT,
   throwStringExceptT,
@@ -36,12 +37,13 @@ module Cardano.Streamer.Common (
 
 import qualified Cardano.Address as A
 import qualified Cardano.Address.Style.Shelley as A
-import Cardano.Crypto.Hash.Class (hashFromBytes)
+import Cardano.Crypto.Hash.Class (hashFromBytes, hashToTextAsHex)
 import Cardano.Ledger.BaseTypes (EpochNo (..), SlotNo (..))
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Crypto
 import Cardano.Ledger.Hashes
 import Cardano.Ledger.Keys
+import Cardano.Ledger.SafeHash
 import Cardano.Streamer.Time
 import Control.Monad.Trans.Except
 import Control.Tracer (Tracer (..))
@@ -69,6 +71,9 @@ deriving instance Aeson.ToJSONKey EpochNo
 
 instance Display DiskSnapshot where
   textDisplay = T.pack . snapshotToFileName
+
+instance Display (SafeHash a c) where
+  display = display . hashToTextAsHex . extractHash
 
 class HasResourceRegistry env where
   registryL :: Lens' env (ResourceRegistry IO)
@@ -121,7 +126,7 @@ data DbStreamerApp blk = DbStreamerApp
   , dsAppStopSlotNo :: !(Maybe SlotNo)
   -- ^ Last slot number to execute
   , dsAppWriteDiskSnapshots :: ![DiskSnapshot]
-  , dsAppWriteBlocks :: !(IORef (Set SlotNo))
+  , dsAppWriteBlocks :: !(IORef (Set SlotNo, Set (SafeHash StandardCrypto EraIndependentBlockBody)))
   , dsAppValidationMode :: !ValidationMode
   , dsAppStartTime :: !UTCTime
   }
@@ -146,6 +151,7 @@ data AppConfig = AppConfig
   , appConfReadDiskSnapshot :: !(Maybe DiskSnapshot)
   , appConfWriteDiskSnapshots :: ![DiskSnapshot]
   , appConfWriteBlocksSlotNoSet :: !(Set SlotNo)
+  , appConfWriteBlocksBlockHashSet :: !(Set (SafeHash StandardCrypto EraIndependentBlockBody))
   , appConfStopSlotNumber :: !(Maybe Word64)
   , appConfValidationMode :: !ValidationMode
   , appConfLogFunc :: !LogFunc
@@ -172,6 +178,10 @@ instance Display Command where
     Stats -> "Statistics"
     ComputeRewards _xs -> "Rewards" -- for: " <> intersperce "," (map displayShow xs)
 
+newtype BlockHashOrSlotNo = BlockHashOrSlotNo
+  {unBlockHashOrSlotNo :: Either SlotNo (SafeHash StandardCrypto EraIndependentBlockBody)}
+  deriving (Eq, Show)
+
 data Opts = Opts
   { oChainDir :: FilePath
   -- ^ Db directory
@@ -185,14 +195,14 @@ data Opts = Opts
   -- ^ Slot number expected for the snapshot to read from.
   , oWriteSnapShotSlotNumbers :: [Word64]
   -- ^ Slot numbers for creating snapshots
-  , oWriteBlocks :: [SlotNo]
+  , oWriteBlocks :: [BlockHashOrSlotNo]
   -- ^ Slot numbers for blocks that we need to write to file. If a slot has no block this will cause a failure.
   -- TODO: Improve:
   -- , oWriteBlocks :: [Either SlotNo BlockHash]
   -- , oWriteBlocksTxs :: Bool
   -- , oWriteBlocksLedgerState :: Bool
   , oStopSlotNumber :: Maybe Word64
-  -- ^ Stope replaying the chain once reaching this slot number. When no slot number is
+  -- ^ Stop replaying the chain once reaching this slot number. When no slot number is
   -- supplied replay will stop only at the end of the immutable chain.
   , oValidationMode :: ValidationMode
   -- ^ What is the level of ledger validation

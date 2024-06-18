@@ -2,6 +2,8 @@
 
 module CLI where
 
+import Cardano.Crypto.Hash (hashFromTextAsHex)
+import Cardano.Ledger.SafeHash (unsafeMakeSafeHash)
 import Cardano.Slotting.Slot
 import Cardano.Streamer.Common
 import qualified Data.List.NonEmpty as NE
@@ -24,6 +26,14 @@ readValidationMode =
     "re" -> Just ReValidation
     "none" -> Just NoValidation
     _ -> Nothing
+
+readBlockHashOrSlotNo :: ReadM BlockHashOrSlotNo
+readBlockHashOrSlotNo =
+  BlockHashOrSlotNo
+    <$> asum
+      [ Right . unsafeMakeSafeHash <$> readWithMaybe hashFromTextAsHex
+      , Left . SlotNo <$> auto
+      ]
 
 optsParser :: Parser Opts
 optsParser =
@@ -103,20 +113,19 @@ optsParser =
           )
       )
     <*> many
-      ( SlotNo
-          <$> option
-            auto
-            ( long "write-block"
-                <> short 'b'
-                <> help
-                  ( mconcat
-                      [ "Write a block with this slot number. "
-                      , "If there is no block at that slot number it will be skipped. "
-                      , "At least for now. Also currently transactions and the ledger "
-                      , "state will be written as well, but that will change in the future."
-                      ]
-                  )
-            )
+      ( option
+          readBlockHashOrSlotNo
+          ( long "write-block"
+              <> short 'b'
+              <> help
+                ( mconcat
+                    [ "Write a block with this slot number or a block hash. "
+                    , "If there is no block at that slot number it will be skipped. "
+                    , "At least for now. Also currently transactions and the ledger "
+                    , "state will be written as well, but that will change in the future."
+                    ]
+                )
+          )
       )
     <*> ( ( Just
               <$> option
