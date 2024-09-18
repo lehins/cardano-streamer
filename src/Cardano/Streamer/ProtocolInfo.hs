@@ -70,7 +70,7 @@ readNodeConfig =
 
 readCardanoGenesisConfig :: MonadIO m => Api.NodeConfig -> m Api.GenesisConfig
 readCardanoGenesisConfig =
-  liftIO . throwExceptT . Api.readCardanoGenesisConfig
+  liftIO . throwExceptT . Api.readCardanoGenesisConfig Nothing
 
 readProtocolInfoCardano :: MonadIO m => FilePath -> m (ProtocolInfo (CardanoBlock StandardCrypto))
 readProtocolInfoCardano configFilePath = do
@@ -105,6 +105,7 @@ mkDbArgs dbDir ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
           pInfoInitLedger
           chunkInfo
           (const True)
+          (Node.stdMkChainDbHasFS dbDir)
           (Node.stdMkChainDbHasFS dbDir)
           ChainDB.defaultArgs
   logDebug $ "Preparing to open the database: " <> displayShow dbDir
@@ -152,9 +153,9 @@ writeLedgerState diskSnapshot ledgerState = do
   let
     extLedgerStateEncoder =
       encodeExtLedgerState (encodeDisk ccfg) (encodeDisk ccfg) (encodeDisk ccfg)
-  liftIO $ writeSnapshot ledgerDbFS extLedgerStateEncoder diskSnapshot ledgerState
+  measure <- measureAction_ $ liftIO $ writeSnapshot ledgerDbFS extLedgerStateEncoder diskSnapshot ledgerState
   snapshotFilePath <- getDiskSnapshotFilePath diskSnapshot
-  logInfo $ "Written DiskSnapshot to: " <> display (T.pack snapshotFilePath)
+  logInfo $ "Written DiskSnapshot to: " <> display (T.pack snapshotFilePath) <> " in " <> display measure
 
 readInitLedgerState
   :: ( DecodeDisk blk (LedgerState blk)
