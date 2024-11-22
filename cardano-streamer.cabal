@@ -50,6 +50,7 @@ library
                      , cardano-ledger-byron
                      , cardano-ledger-core >= 1.12
                      , cardano-ledger-shelley
+                     , cardano-ledger-conway >= 1.17.2.0
                      , cardano-protocol-tpraos
                      , cardano-slotting
                      , cassava
