@@ -45,26 +45,26 @@ import Ouroboros.Consensus.Ledger.Abstract (
 import Ouroboros.Consensus.Ledger.Basics (LedgerResult (lrResult), applyChainTickLedgerResult)
 import Ouroboros.Consensus.Ledger.Extended (ExtLedgerCfg (..), ExtLedgerState (headerState), Ticked)
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
-import Ouroboros.Consensus.Protocol.Abstract (ChainDepState)
 import Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
-import Ouroboros.Consensus.Storage.Serialisation (DecodeDisk (decodeDisk), EncodeDisk)
+import Ouroboros.Consensus.Storage.Serialisation (DecodeDisk (decodeDisk))
 import Ouroboros.Consensus.Util.ResourceRegistry
+import RIO.Directory (doesDirectoryExist, listDirectory)
 import RIO.FilePath
 import RIO.List as List
 import qualified RIO.Set as Set
 import qualified RIO.Text as T
 
-sourceBlocks
-  :: ( MonadIO m
-     , MonadReader (DbStreamerApp blk) m
-     , HasHeader blk
-     , HasAnnTip blk
-     )
-  => BlockComponent blk b
-  -> WithOrigin (AnnTip blk)
-  -> ConduitT i (BlockWithInfo b) m ()
+sourceBlocks ::
+  ( MonadIO m
+  , MonadReader (DbStreamerApp blk) m
+  , HasHeader blk
+  , HasAnnTip blk
+  ) =>
+  BlockComponent blk b ->
+  WithOrigin (AnnTip blk) ->
+  ConduitT i (BlockWithInfo b) m ()
 sourceBlocks blockComponent withOriginAnnTip = do
   registry <- view registryL
   iDb <- view iDbL
@@ -97,20 +97,19 @@ sourceBlocks blockComponent withOriginAnnTip = do
           ImmutableDB.IteratorResult (slotNo, blockSize, headerSize, comp) ->
             yield (BlockWithInfo slotNo blockSize headerSize n comp) >> loop (n + 1)
 
-sourceBlocksWithAccState
-  :: ( MonadIO m
-     , MonadReader (DbStreamerApp blk) m
-     , HasHeader blk
-     , HasAnnTip blk
-     , EncodeDisk blk (AnnTip blk)
-     , EncodeDisk blk (LedgerState blk)
-     , EncodeDisk blk (ChainDepState (BlockProtocol blk))
-     )
-  => BlockComponent blk b
-  -> ExtLedgerState blk
-  -> e
-  -> (ExtLedgerState blk -> e -> BlockWithInfo b -> m (ExtLedgerState blk, e, c))
-  -> ConduitT a c m (ExtLedgerState blk, e)
+sourceBlocksWithAccState ::
+  ( MonadIO m
+  , MonadReader (DbStreamerApp (CardanoBlock StandardCrypto)) m
+  ) =>
+  BlockComponent (CardanoBlock StandardCrypto) b ->
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  e ->
+  ( ExtLedgerState (CardanoBlock StandardCrypto) ->
+    e ->
+    BlockWithInfo b ->
+    m (ExtLedgerState (CardanoBlock StandardCrypto), e, d)
+  ) ->
+  ConduitT a d m (ExtLedgerState (CardanoBlock StandardCrypto), e)
 sourceBlocksWithAccState blockComponent initState acc0 action = do
   let prepareDiskSnapshots ds =
         sortOn dsNumber $
@@ -145,39 +144,35 @@ sourceBlocksWithAccState blockComponent initState acc0 action = do
           yield c
           loopWithoutSnapshotWriting ledgerState' acc'
 
-sourceBlocksWithState
-  :: ( MonadIO m
-     , MonadReader (DbStreamerApp blk) m
-     , HasHeader blk
-     , HasAnnTip blk
-     , EncodeDisk blk (AnnTip blk)
-     , EncodeDisk blk (LedgerState blk)
-     , EncodeDisk blk (ChainDepState (BlockProtocol blk))
-     )
-  => BlockComponent blk b
-  -> ExtLedgerState blk
-  -> (ExtLedgerState blk -> BlockWithInfo b -> m (ExtLedgerState blk, c))
-  -> ConduitT a c m (ExtLedgerState blk)
+sourceBlocksWithState ::
+  ( MonadIO m
+  , MonadReader (DbStreamerApp (CardanoBlock StandardCrypto)) m
+  ) =>
+  BlockComponent (CardanoBlock StandardCrypto) b ->
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  ( ExtLedgerState (CardanoBlock StandardCrypto) ->
+    BlockWithInfo b ->
+    m (ExtLedgerState (CardanoBlock StandardCrypto), d)
+  ) ->
+  ConduitT a d m (ExtLedgerState (CardanoBlock StandardCrypto))
 sourceBlocksWithState blockComponent initState action =
   fmap fst $
     sourceBlocksWithAccState blockComponent initState () $
       \s a b -> (\(s', c) -> (s', a, c)) <$> action s b
 
-foldBlocksWithState
-  :: ( MonadIO m
-     , MonadReader (DbStreamerApp blk) m
-     , HasHeader blk
-     , HasAnnTip blk
-     , EncodeDisk blk (AnnTip blk)
-     , EncodeDisk blk (LedgerState blk)
-     , EncodeDisk blk (ChainDepState (BlockProtocol blk))
-     )
-  => BlockComponent blk b
-  -> ExtLedgerState blk
-  -- ^ Initial ledger state
-  -> (ExtLedgerState blk -> BlockWithInfo b -> m (ExtLedgerState blk))
-  -- ^ Function to process each block with current ledger state
-  -> ConduitT a Void m (ExtLedgerState blk)
+foldBlocksWithState ::
+  ( MonadIO m
+  , MonadReader (DbStreamerApp (CardanoBlock StandardCrypto)) m
+  ) =>
+  BlockComponent (CardanoBlock StandardCrypto) b ->
+  -- | Initial ledger state
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  -- | Function to process each block with current ledger state
+  ( ExtLedgerState (CardanoBlock StandardCrypto) ->
+    BlockWithInfo b ->
+    m (ExtLedgerState (CardanoBlock StandardCrypto))
+  ) ->
+  ConduitT a Void m (ExtLedgerState (CardanoBlock StandardCrypto))
 foldBlocksWithState blockComponent initState action =
   sourceBlocksWithState blockComponent initState (\s b -> (,()) <$> action s b)
     `fuseUpstream` sinkNull
@@ -205,29 +200,29 @@ foldBlocksWithState blockComponent initState action =
 --   let !result = lrResult $ tickThenReapplyLedgerResult ledgerCfg block prevLedger
 --   pure (result, blockSummary)
 
-advanceRawBlockGranular
-  :: ( LByteString
-       -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (CardanoBlock StandardCrypto)
-       -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (CardanoBlock StandardCrypto, a)
-     )
-  -> ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto))
-       -> SlotNo
-       -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) b
-     )
-  -> ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto))
-       -> RIO
-            (DbStreamerApp (CardanoBlock StandardCrypto))
-            (ExtLedgerState (CardanoBlock StandardCrypto))
-       -> (a, b)
-       -> RIO
-            (DbStreamerApp (CardanoBlock StandardCrypto))
-            (ExtLedgerState (CardanoBlock StandardCrypto), c)
-     )
-  -> ExtLedgerState (CardanoBlock StandardCrypto)
-  -> BlockWithInfo LByteString
-  -> RIO
+advanceRawBlockGranular ::
+  ( LByteString ->
+    RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (CardanoBlock StandardCrypto) ->
+    RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (CardanoBlock StandardCrypto, a)
+  ) ->
+  ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto)) ->
+    SlotNo ->
+    RIO (DbStreamerApp (CardanoBlock StandardCrypto)) b
+  ) ->
+  ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto)) ->
+    RIO
+      (DbStreamerApp (CardanoBlock StandardCrypto))
+      (ExtLedgerState (CardanoBlock StandardCrypto)) ->
+    (a, b) ->
+    RIO
       (DbStreamerApp (CardanoBlock StandardCrypto))
       (ExtLedgerState (CardanoBlock StandardCrypto), c)
+  ) ->
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  BlockWithInfo LByteString ->
+  RIO
+    (DbStreamerApp (CardanoBlock StandardCrypto))
+    (ExtLedgerState (CardanoBlock StandardCrypto), c)
 advanceRawBlockGranular decodeBlock inspectTickState inspectBlockState prevLedger bwi = do
   ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
   let blockDecoder =
@@ -239,25 +234,25 @@ advanceRawBlockGranular decodeBlock inspectTickState inspectBlockState prevLedge
         inspectBlockState tickedExtLedgerState ticker (a, b)
   advanceBlockGranular inspectTickState inspectBlockState' prevLedger (bwi{biBlockComponent = block})
 
-advanceBlockGranular
-  :: ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto))
-       -> SlotNo
-       -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) a
-     )
-  -> ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto))
-       -> RIO
-            (DbStreamerApp (CardanoBlock StandardCrypto))
-            (ExtLedgerState (CardanoBlock StandardCrypto))
-       -> a
-       -> RIO
-            (DbStreamerApp (CardanoBlock StandardCrypto))
-            (ExtLedgerState (CardanoBlock StandardCrypto), b)
-     )
-  -> ExtLedgerState (CardanoBlock StandardCrypto)
-  -> BlockWithInfo (CardanoBlock StandardCrypto)
-  -> RIO
+advanceBlockGranular ::
+  ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto)) ->
+    SlotNo ->
+    RIO (DbStreamerApp (CardanoBlock StandardCrypto)) a
+  ) ->
+  ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto)) ->
+    RIO
+      (DbStreamerApp (CardanoBlock StandardCrypto))
+      (ExtLedgerState (CardanoBlock StandardCrypto)) ->
+    a ->
+    RIO
       (DbStreamerApp (CardanoBlock StandardCrypto))
       (ExtLedgerState (CardanoBlock StandardCrypto), b)
+  ) ->
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  BlockWithInfo (CardanoBlock StandardCrypto) ->
+  RIO
+    (DbStreamerApp (CardanoBlock StandardCrypto))
+    (ExtLedgerState (CardanoBlock StandardCrypto), b)
 advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
   let slotNo = biSlotNo bwi
       block = biBlockComponent bwi
@@ -317,13 +312,13 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
   when (biBlocksProcessed bwi `mod` 20 == 0) logStickyStatus
   extLedgerState `seq` pure (extLedgerState, b)
 
-reportValidationError
-  :: (MonadReader (DbStreamerApp blk) m, MonadIO m, Show a, Crypto c)
-  => a
-  -> SlotNo
-  -> CardanoBlock c
-  -> ExtLedgerState (CardanoBlock c)
-  -> m d
+reportValidationError ::
+  (MonadReader (DbStreamerApp blk) m, MonadIO m, Show a, Crypto c) =>
+  a ->
+  SlotNo ->
+  CardanoBlock c ->
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  m d
 reportValidationError errorMessage slotNo block ledgerState = do
   let rawBlock = getRawBlock block
   logError $
@@ -331,12 +326,12 @@ reportValidationError errorMessage slotNo block ledgerState = do
   writeBlockWithState slotNo block ledgerState
   throwString $ show errorMessage
 
-writeBlockWithState
-  :: (MonadReader (DbStreamerApp blk) m, MonadIO m, Crypto c)
-  => SlotNo
-  -> CardanoBlock c
-  -> ExtLedgerState (CardanoBlock c)
-  -> m ()
+writeBlockWithState ::
+  (MonadReader (DbStreamerApp blk) m, MonadIO m, Crypto c) =>
+  SlotNo ->
+  CardanoBlock c ->
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  m ()
 writeBlockWithState slotNo block ledgerState = do
   let rawBlock = getRawBlock block
       blockHashHex = hashToTextAsHex (extractHash (rawBlockHash rawBlock))
@@ -355,18 +350,18 @@ writeBlockWithState slotNo block ledgerState = do
       (zipWithM_ (\ix -> writeTx (mkTxFileName ix)) [0 :: Int ..])
       block
 
-advanceBlock
-  :: ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto))
-       -- \^ Intermediate, i.e ticked ledger state
-       -> ExtLedgerState (CardanoBlock StandardCrypto)
-       -- \^ Next ledger state
-       -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) a
-     )
-  -> ExtLedgerState (CardanoBlock StandardCrypto)
-  -> BlockWithInfo (CardanoBlock StandardCrypto)
-  -> RIO
-      (DbStreamerApp (CardanoBlock StandardCrypto))
-      (ExtLedgerState (CardanoBlock StandardCrypto), a)
+advanceBlock ::
+  ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto)) ->
+    -- \^ Intermediate, i.e ticked ledger state
+    ExtLedgerState (CardanoBlock StandardCrypto) ->
+    -- \^ Next ledger state
+    RIO (DbStreamerApp (CardanoBlock StandardCrypto)) a
+  ) ->
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  BlockWithInfo (CardanoBlock StandardCrypto) ->
+  RIO
+    (DbStreamerApp (CardanoBlock StandardCrypto))
+    (ExtLedgerState (CardanoBlock StandardCrypto), a)
 advanceBlock inspectBlockState !prevLedger !block =
   advanceBlockGranular
     (\_ _ -> pure ())
@@ -378,21 +373,21 @@ advanceBlock inspectBlockState !prevLedger !block =
     prevLedger
     block
 
-advanceBlock_
-  :: ExtLedgerState (CardanoBlock StandardCrypto)
-  -> BlockWithInfo (CardanoBlock StandardCrypto)
-  -> RIO
-      (DbStreamerApp (CardanoBlock StandardCrypto))
-      (ExtLedgerState (CardanoBlock StandardCrypto))
+advanceBlock_ ::
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  BlockWithInfo (CardanoBlock StandardCrypto) ->
+  RIO
+    (DbStreamerApp (CardanoBlock StandardCrypto))
+    (ExtLedgerState (CardanoBlock StandardCrypto))
 advanceBlock_ !prevLedger !block =
   fst <$> advanceBlock (\_ _ -> pure ()) prevLedger block
 
-advanceBlockStats
-  :: ExtLedgerState (CardanoBlock StandardCrypto)
-  -> BlockWithInfo (CardanoBlock StandardCrypto)
-  -> RIO
-      (DbStreamerApp (CardanoBlock StandardCrypto))
-      (ExtLedgerState (CardanoBlock StandardCrypto), EpochBlockStats)
+advanceBlockStats ::
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  BlockWithInfo (CardanoBlock StandardCrypto) ->
+  RIO
+    (DbStreamerApp (CardanoBlock StandardCrypto))
+    (ExtLedgerState (CardanoBlock StandardCrypto), EpochBlockStats)
 advanceBlockStats els blk =
   advanceBlock
     ( \tls _ ->
@@ -414,13 +409,13 @@ advanceBlockStats els blk =
     els
     blk
 
-calcEpochStats
-  :: ExtLedgerState (CardanoBlock StandardCrypto)
-  -> ConduitT
-      a
-      c
-      (RIO (DbStreamerApp (CardanoBlock StandardCrypto)))
-      EpochStats
+calcEpochStats ::
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  ConduitT
+    a
+    c
+    (RIO (DbStreamerApp (CardanoBlock StandardCrypto)))
+    EpochStats
 calcEpochStats initLedgerState = do
   epochStats <-
     void (sourceBlocksWithState GetBlock initLedgerState advanceBlockStats)
@@ -448,11 +443,11 @@ instance Display (RewardsPerEpoch StandardCrypto) where
       , display (unEpochNo rewardsEpochNo)
       ]
         ++ [ "\n    "
-            <> displayShow cred
-            <> ": "
-            <> display rew
-            <> "  "
-            <> display wdrl
+              <> displayShow cred
+              <> ": "
+              <> display rew
+              <> "  "
+              <> display wdrl
            | (cred, (Coin rew, Coin wdrl)) <- Map.toList rewardsAndWithdrawals
            ]
     where
@@ -464,18 +459,18 @@ instance Display (RewardsPerEpoch StandardCrypto) where
           rewardsReceivedThisEpoch
           rewardsWithdrawnThisEpoch
 
-accumNewRewards
-  :: Set (Credential 'Staking StandardCrypto)
-  -> ExtLedgerState (CardanoBlock StandardCrypto)
-  -> RewardsState StandardCrypto
-  -> BlockWithInfo (CardanoBlock StandardCrypto)
-  -> ReaderT
-      (DbStreamerApp (CardanoBlock StandardCrypto))
-      IO
-      ( ExtLedgerState (CardanoBlock StandardCrypto)
-      , RewardsState StandardCrypto
-      , Maybe (RewardsPerEpoch StandardCrypto)
-      )
+accumNewRewards ::
+  Set (Credential 'Staking StandardCrypto) ->
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  RewardsState StandardCrypto ->
+  BlockWithInfo (CardanoBlock StandardCrypto) ->
+  ReaderT
+    (DbStreamerApp (CardanoBlock StandardCrypto))
+    IO
+    ( ExtLedgerState (CardanoBlock StandardCrypto)
+    , RewardsState StandardCrypto
+    , Maybe (RewardsPerEpoch StandardCrypto)
+    )
 accumNewRewards creds prevExtLedgerState rs bwi = do
   let calcRewards tels _els =
         detectNewRewards
@@ -541,16 +536,16 @@ accumNewRewards creds prevExtLedgerState rs bwi = do
 --             filePath = dir </> "new-epoch-state_" ++ show slotNo ++ ".cbor"
 --         writeNewEpochState filePath extLedgerState
 
-replayChain
-  :: ExtLedgerState (CardanoBlock StandardCrypto)
-  -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (ExtLedgerState (CardanoBlock StandardCrypto))
+replayChain ::
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (ExtLedgerState (CardanoBlock StandardCrypto))
 replayChain initLedgerState = do
   runConduit $ foldBlocksWithState GetBlock initLedgerState advanceBlock_
 
-computeRewards
-  :: Set (Credential 'Staking StandardCrypto)
-  -> ExtLedgerState (CardanoBlock StandardCrypto)
-  -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) [RewardsPerEpoch StandardCrypto]
+computeRewards ::
+  Set (Credential 'Staking StandardCrypto) ->
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  RIO (DbStreamerApp (CardanoBlock StandardCrypto)) [RewardsPerEpoch StandardCrypto]
 computeRewards creds initLedgerState = do
   -- (extLedgerState, rs) <-
   runConduit $
@@ -566,20 +561,20 @@ computeRewards creds initLedgerState = do
 
     emptyRewardsState = RewardsState (EpochNo 0) mempty mempty
 
-replayBenchmarkReport
-  :: ExtLedgerState (CardanoBlock StandardCrypto)
-  -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) StatsReport
+replayBenchmarkReport ::
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  RIO (DbStreamerApp (CardanoBlock StandardCrypto)) StatsReport
 replayBenchmarkReport initLedgerState = do
   report <- runConduit $ void (replayWithBenchmarking initLedgerState) .| calcStatsReport
   report <$ writeReport "Benchmark" report
 
-replayWithBenchmarking
-  :: ExtLedgerState (CardanoBlock StandardCrypto)
-  -> ConduitT
-      a
-      Stat
-      (RIO (DbStreamerApp (CardanoBlock StandardCrypto)))
-      (ExtLedgerState (CardanoBlock StandardCrypto))
+replayWithBenchmarking ::
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  ConduitT
+    a
+    Stat
+    (RIO (DbStreamerApp (CardanoBlock StandardCrypto)))
+    (ExtLedgerState (CardanoBlock StandardCrypto))
 replayWithBenchmarking initLedgerState = do
   withBenchmarking $ \decodeBlock benchRunTick benchRunBlock ->
     sourceBlocksWithState GetRawBlock initLedgerState $ \ls ->
@@ -587,6 +582,12 @@ replayWithBenchmarking initLedgerState = do
 
 runApp :: Opts -> IO ()
 runApp Opts{..} = do
+  -- Consensus code will initialize the chain directory if it doesn't exist, which makes
+  -- no sense for a tool that is suppose to be read only.
+  unlessM (doesDirectoryExist oChainDir) $ do
+    throwString $ "Chain directory does not exist: " <> oChainDir
+  whenM (null <$> listDirectory oChainDir) $ do
+    throwString $ "Chain directory is empty: " <> oChainDir
   logOpts <- logOptionsHandle stdout oVerbose
   withLogFunc (setLogMinLevel oLogLevel $ setLogUseLoc oDebug logOpts) $ \logFunc -> do
     withRegistry $ \registry -> do

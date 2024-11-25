@@ -14,6 +14,7 @@ import qualified Cardano.Api as Api
 import Cardano.Ledger.BaseTypes (SlotNo (..))
 import Cardano.Streamer.Benchmark
 import Cardano.Streamer.Common
+import Cardano.Streamer.LedgerState
 import Codec.Serialise (Serialise (decode))
 import Control.Monad.Trans.Except
 import Ouroboros.Consensus.Block (BlockProtocol, ConvertRawHash, GetPrevHash)
@@ -52,10 +53,10 @@ import Ouroboros.Consensus.Storage.Serialisation (
   HasBinaryBlockInfo,
   ReconstructNestedCtxt,
  )
--- import qualified Ouroboros.Consensus.Storage.VolatileDB as VolatileDB
 import Ouroboros.Consensus.Util.CBOR (ReadIncrementalErr)
 import Ouroboros.Consensus.Util.ResourceRegistry (runWithTempRegistry)
 import Ouroboros.Network.Block (HeaderHash)
+import RIO.Directory (doesFileExist, removeFile)
 import qualified RIO.Text as T
 import RIO.Time
 
@@ -81,17 +82,17 @@ readProtocolInfoCardano configFilePath = do
 instance Exception ReadIncrementalErr
 
 -- | Prepare arguments for chain db.
-mkDbArgs
-  :: ( MonadIO m
-     , MonadReader env m
-     , HasResourceRegistry env
-     , HasLogFunc env
-     , Show (Header blk)
-     , Node.RunNode blk
-     )
-  => FilePath
-  -> ProtocolInfo blk
-  -> m (ChainDB.ChainDbArgs Identity IO blk)
+mkDbArgs ::
+  ( MonadIO m
+  , MonadReader env m
+  , HasResourceRegistry env
+  , HasLogFunc env
+  , Show (Header blk)
+  , Node.RunNode blk
+  ) =>
+  FilePath ->
+  ProtocolInfo blk ->
+  m (ChainDB.ChainDbArgs Identity IO blk)
 mkDbArgs dbDir ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
   registry <- view registryL
   dbTracer <- mkTracer (Just "Trace") LevelDebug
@@ -113,21 +114,21 @@ mkDbArgs dbDir ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
   where
     chunkInfo = Node.nodeImmutableDbChunkInfo (configStorage pInfoConfig)
 
-withImmutableDb
-  :: ( MonadUnliftIO m
-     , MonadReader env m
-     , GetPrevHash blk
-     , ConvertRawHash blk
-     , EncodeDisk blk blk
-     , DecodeDisk blk (LByteString -> blk)
-     , DecodeDiskDep (NestedCtxt Header) blk
-     , ReconstructNestedCtxt Header blk
-     , HasBinaryBlockInfo blk
-     , HasLogFunc env
-     )
-  => ImmutableDbArgs Identity IO blk
-  -> (ImmutableDB.ImmutableDB IO blk -> m b)
-  -> m b
+withImmutableDb ::
+  ( MonadUnliftIO m
+  , MonadReader env m
+  , GetPrevHash blk
+  , ConvertRawHash blk
+  , EncodeDisk blk blk
+  , DecodeDisk blk (LByteString -> blk)
+  , DecodeDiskDep (NestedCtxt Header) blk
+  , ReconstructNestedCtxt Header blk
+  , HasBinaryBlockInfo blk
+  , HasLogFunc env
+  ) =>
+  ImmutableDbArgs Identity IO blk ->
+  (ImmutableDB.ImmutableDB IO blk -> m b) ->
+  m b
 withImmutableDb iDbArgs action = do
   res <- withRunInIO $ \run ->
     ImmutableDB.withDB (ImmutableDB.openDB iDbArgs runWithTempRegistry) $ \db ->
@@ -137,34 +138,49 @@ withImmutableDb iDbArgs action = do
   logDebug "Closed an immutable database"
   pure res
 
-writeLedgerState
-  :: ( MonadIO m
-     , MonadReader (DbStreamerApp blk) m
-     , EncodeDisk blk (LedgerState blk)
-     , EncodeDisk blk (ChainDepState (BlockProtocol blk))
-     , EncodeDisk blk (AnnTip blk)
-     )
-  => DiskSnapshot
-  -> ExtLedgerState blk
-  -> m ()
-writeLedgerState diskSnapshot ledgerState = do
+writeLedgerState ::
+  ( MonadIO m
+  , MonadReader (DbStreamerApp (CardanoBlock StandardCrypto)) m
+  -- , EncodeDisk (CardanoBlock StandardCrypto) (LedgerState (CardanoBlock StandardCrypto))
+  -- , EncodeDisk (CardanoBlock StandardCrypto) (ChainDepState (BlockProtocol (CardanoBlock StandardCrypto)))
+  -- , EncodeDisk (CardanoBlock StandardCrypto) (AnnTip (CardanoBlock StandardCrypto))
+  ) =>
+  DiskSnapshot ->
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  m ()
+writeLedgerState diskSnapshot extLedgerState = do
   ledgerDbFS <- lgrHasFS . ChainDB.cdbLgrDbArgs . dsAppChainDbArgs <$> ask
   ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
   let
     extLedgerStateEncoder =
       encodeExtLedgerState (encodeDisk ccfg) (encodeDisk ccfg) (encodeDisk ccfg)
-  measure <- measureAction_ $ liftIO $ writeSnapshot ledgerDbFS extLedgerStateEncoder diskSnapshot ledgerState
   snapshotFilePath <- getDiskSnapshotFilePath diskSnapshot
-  logInfo $ "Written DiskSnapshot to: " <> display (T.pack snapshotFilePath) <> " in " <> display measure
+  whenM (doesFileExist snapshotFilePath) $ do
+    -- TODO: add interactive mode and ask for confirmation
+    removeFile snapshotFilePath
+    logWarn $
+      "DiskSnapshot at path already exists: "
+        <> display (T.pack snapshotFilePath)
+        <> ". Removed, so it can be overwritten!"
+  measure <-
+    measureAction_ $ liftIO $ writeSnapshot ledgerDbFS extLedgerStateEncoder diskSnapshot extLedgerState
+  logInfo $
+    "Written DiskSnapshot to: " <> display (T.pack snapshotFilePath) <> " in " <> display measure
+  when True $ do
+    -- TODO: Add cli option
+    let nesFilePath = snapshotFilePath <> "_nes.cbor"
+    measureNes <- measureAction_ $ writeNewEpochState nesFilePath extLedgerState
+    logInfo $
+      "Written NewEpochState to: " <> display (T.pack nesFilePath) <> " in " <> display measureNes
 
-readInitLedgerState
-  :: ( DecodeDisk blk (LedgerState blk)
-     , DecodeDisk blk (ChainDepState (BlockProtocol blk))
-     , DecodeDisk blk (AnnTip blk)
-     , Serialise (HeaderHash blk)
-     )
-  => DiskSnapshot
-  -> RIO (DbStreamerApp blk) (ExtLedgerState blk)
+readInitLedgerState ::
+  ( DecodeDisk blk (LedgerState blk)
+  , DecodeDisk blk (ChainDepState (BlockProtocol blk))
+  , DecodeDisk blk (AnnTip blk)
+  , Serialise (HeaderHash blk)
+  ) =>
+  DiskSnapshot ->
+  RIO (DbStreamerApp blk) (ExtLedgerState blk)
 readInitLedgerState diskSnapshot = do
   snapshotFilePath <- getDiskSnapshotFilePath diskSnapshot
   logInfo $ "Reading initial ledger state: " <> display (T.pack snapshotFilePath)
@@ -181,23 +197,23 @@ readInitLedgerState diskSnapshot = do
   logInfo $ "Done reading the ledger state in: " <> display measure
   pure ledgerState
 
-getInitLedgerState
-  :: ( DecodeDisk blk (LedgerState blk)
-     , DecodeDisk blk (ChainDepState (BlockProtocol blk))
-     , DecodeDisk blk (AnnTip blk)
-     , Serialise (HeaderHash blk)
-     )
-  => Maybe DiskSnapshot
-  -> RIO (DbStreamerApp blk) (ExtLedgerState blk)
+getInitLedgerState ::
+  ( DecodeDisk blk (LedgerState blk)
+  , DecodeDisk blk (ChainDepState (BlockProtocol blk))
+  , DecodeDisk blk (AnnTip blk)
+  , Serialise (HeaderHash blk)
+  ) =>
+  Maybe DiskSnapshot ->
+  RIO (DbStreamerApp blk) (ExtLedgerState blk)
 getInitLedgerState = \case
   Nothing -> pInfoInitLedger . dsAppProtocolInfo <$> ask
   Just diskSnapshot -> readInitLedgerState diskSnapshot
 
-runDbStreamerApp
-  :: ( ExtLedgerState (CardanoBlock StandardCrypto)
-       -> RIO (DbStreamerApp (CardanoBlock StandardCrypto)) a
-     )
-  -> RIO AppConfig a
+runDbStreamerApp ::
+  ( ExtLedgerState (CardanoBlock StandardCrypto) ->
+    RIO (DbStreamerApp (CardanoBlock StandardCrypto)) a
+  ) ->
+  RIO AppConfig a
 runDbStreamerApp action = do
   appConf <- ask
   protocolInfo <- readProtocolInfoCardano (appConfFilePath appConf)
@@ -207,7 +223,8 @@ runDbStreamerApp action = do
   withImmutableDb iDbArgs $ \iDb -> do
     logInfo "withImmutableDb start"
     startTime <- getCurrentTime
-    writeBlocksRef <- newIORef (appConfWriteBlocksSlotNoSet appConf, appConfWriteBlocksBlockHashSet appConf)
+    writeBlocksRef <-
+      newIORef (appConfWriteBlocksSlotNoSet appConf, appConfWriteBlocksBlockHashSet appConf)
     let app =
           DbStreamerApp
             { dsAppLogFunc = appConfLogFunc appConf
@@ -226,4 +243,3 @@ runDbStreamerApp action = do
     res <- runRIO app (getInitLedgerState (appConfReadDiskSnapshot appConf) >>= action)
     logInfo "withImmutableDb end"
     pure res
-

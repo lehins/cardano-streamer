@@ -1,3 +1,4 @@
+cabal-version:       3.0
 name:                cardano-streamer
 version:             0.1.0.0
 synopsis:            Short description
@@ -7,12 +8,11 @@ license:             Apache-2.0
 license-file:        LICENSE
 author:              Alexey Kuleshevich
 maintainer:          alexey@kuleshevi.ch
-copyright:           2023 Alexey Kuleshevich
+copyright:           2023-2025 Alexey Kuleshevich
 category:            Algorithms
 build-type:          Simple
 extra-source-files:  README.md
                    , CHANGELOG.md
-cabal-version:       1.18
 tested-with:         GHC == 9.2.7
 
 library
@@ -60,8 +60,6 @@ library
                      , criterion-measurement
                      , FailT
                      , ouroboros-consensus
-                     -- , ouroboros-consensus-byron
-                     -- , ouroboros-consensus-shelley
                      , ouroboros-consensus-protocol
                      , ouroboros-consensus-cardano >= 0.16
                      , ouroboros-consensus-diffusion

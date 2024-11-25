@@ -16,7 +16,7 @@ import Cardano.Ledger.Api.Era
 import Cardano.Ledger.Babbage.Collateral (collOuts)
 import Cardano.Ledger.Babbage.Core
 import Cardano.Ledger.BaseTypes
-import Cardano.Ledger.Binary.Plain (ToCBOR)
+import Cardano.Ledger.Binary (EncCBOR, ToCBOR)
 import Cardano.Ledger.MemoBytes
 import Cardano.Ledger.Plutus.Language
 import Cardano.Ledger.Shelley.LedgerState (NewEpochState)
@@ -82,6 +82,7 @@ class
   , EraGov era
   , EraUTxO era
   , ToCBOR (NewEpochState era)
+  , EncCBOR (NewEpochState era)
   , EraCrypto era ~ c
   ) =>
   EraApp era c
@@ -130,8 +131,8 @@ instance Crypto c => EraApp (ConwayEra c) c where
     | tx ^. isValidTxL == IsValid True = txouts (tx ^. bodyTxL)
     | otherwise = collOuts (tx ^. bodyTxL)
 
-appTimelockScript
-  :: (EraScript era, NativeScript era ~ Timelock era) => Script era -> Maybe AppScript
+appTimelockScript ::
+  (EraScript era, NativeScript era ~ Timelock era) => Script era -> Maybe AppScript
 appTimelockScript script = AppTimelock <$> getNativeScript script
 
 appPlutusScript :: AlonzoEraScript era => Script era -> Maybe AppScript
@@ -140,11 +141,11 @@ appPlutusScript script = do
   Just $ withPlutusScript ps AppPlutusScript
 
 -- | Get all scripts referenced by the transaction, regardless if they are used or not.
-getAllReferenceScripts
-  :: BabbageEraTxBody era
-  => UTxO era
-  -> TxBody era
-  -> [Script era]
+getAllReferenceScripts ::
+  BabbageEraTxBody era =>
+  UTxO era ->
+  TxBody era ->
+  [Script era]
 getAllReferenceScripts (UTxO mp) txBody =
   mapMaybe refScript $ Map.elems $ Map.restrictKeys mp inputs
   where
@@ -162,10 +163,10 @@ appScriptTxWits :: EraApp era c => TxWits era -> Map (ScriptHash c) AppScript
 appScriptTxWits txWits = Map.map appScript (txWits ^. scriptTxWitsL)
 
 -- | Plutus Scripts from outputs
-babbageScriptOutsTxBody
-  :: BabbageEraTxBody era
-  => TxBody era
-  -> [Script era]
+babbageScriptOutsTxBody ::
+  BabbageEraTxBody era =>
+  TxBody era ->
+  [Script era]
 babbageScriptOutsTxBody txBody =
   mapMaybe getOutputScript $ toList (txBody ^. outputsTxBodyL)
   where
@@ -211,11 +212,11 @@ scriptsPerLanguage = foldl' combinePlutusScripts mempty
 -- | Produce all of the reference scripts that are evaluated and all of the provided
 -- reference scripts. It is possible for the list to contain duplicate scripts and scripts
 -- that are not even in the Map.
-refScriptsTxBody
-  :: EraApp era c
-  => UTxO era
-  -> TxBody era
-  -> (Map (ScriptHash c) AppScript, [AppScript])
+refScriptsTxBody ::
+  EraApp era c =>
+  UTxO era ->
+  TxBody era ->
+  (Map (ScriptHash c) AppScript, [AppScript])
 refScriptsTxBody utxo txBody =
   (refScriptsUsed, map appScript refScripts)
   where

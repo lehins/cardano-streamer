@@ -198,7 +198,6 @@ data Opts = Opts
   , oWriteBlocks :: [BlockHashOrSlotNo]
   -- ^ Slot numbers for blocks that we need to write to file. If a slot has no block this will cause a failure.
   -- TODO: Improve:
-  -- , oWriteBlocks :: [Either SlotNo BlockHash]
   -- , oWriteBlocksTxs :: Bool
   -- , oWriteBlocksLedgerState :: Bool
   , oStopSlotNumber :: Maybe Word64
