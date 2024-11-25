@@ -17,6 +17,7 @@ module Cardano.Streamer.BlockInfo where
 import qualified Cardano.Chain.Block as B
 import qualified Cardano.Chain.UTxO as B
 import qualified Cardano.Chain.Update as B
+import Cardano.Crypto.Hash.Class (hashFromTextAsHex)
 import Cardano.Ledger.Address
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary
@@ -40,6 +41,7 @@ import qualified Data.ByteString.Short as SBS
 import Data.Foldable (foldMap')
 import Data.List (intersperse)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (fromJust)
 import qualified Data.Text.Encoding as T
 import qualified Data.Vector as V
 import Ouroboros.Consensus.Byron.Ledger.Block
@@ -121,13 +123,13 @@ getCardanoEra :: Crypto c => CardanoBlock c -> CardanoEra
 getCardanoEra =
   applyBlock (\_ -> Byron) (\era _ -> era) (\era _ -> era)
 
-applyBlock
-  :: Crypto c
-  => (ByronBlock -> a)
-  -> (forall era. EraApp era c => CardanoEra -> ShelleyBlock (TPraos (EraCrypto era)) era -> a)
-  -> (forall era. EraApp era c => CardanoEra -> ShelleyBlock (Praos (EraCrypto era)) era -> a)
-  -> CardanoBlock c
-  -> a
+applyBlock ::
+  Crypto c =>
+  (ByronBlock -> a) ->
+  (forall era. EraApp era c => CardanoEra -> ShelleyBlock (TPraos (EraCrypto era)) era -> a) ->
+  (forall era. EraApp era c => CardanoEra -> ShelleyBlock (Praos (EraCrypto era)) era -> a) ->
+  CardanoBlock c ->
+  a
 applyBlock applyBronBlock applyTPraosBlock applyPraosBlock = \case
   BlockByron byronBlock -> applyBronBlock byronBlock
   BlockShelley shelleyBlock -> applyTPraosBlock Shelley shelleyBlock
@@ -205,11 +207,11 @@ getBlockSummary =
                 , bpTxsSummary = V.empty
                 }
 
-getTPraosBlockSummary
-  :: (EraSegWits era, Crypto c)
-  => CardanoEra
-  -> ShelleyBlock (TPraos c) era
-  -> BlockSummary
+getTPraosBlockSummary ::
+  (EraSegWits era, Crypto c) =>
+  CardanoEra ->
+  ShelleyBlock (TPraos c) era ->
+  BlockSummary
 getTPraosBlockSummary era block =
   let (blockHeaderBody, blockHeaderSize) =
         case bheader (shelleyBlockRaw block) of
@@ -230,11 +232,11 @@ getTPraosBlockSummary era block =
           , bpTxsSummary = getTxsSummary txsSeq
           }
 
-getPraosBlockSummary
-  :: (EraSegWits era, Crypto c)
-  => CardanoEra
-  -> ShelleyBlock (Praos c) era
-  -> BlockSummary
+getPraosBlockSummary ::
+  (EraSegWits era, Crypto c) =>
+  CardanoEra ->
+  ShelleyBlock (Praos c) era ->
+  BlockSummary
 getPraosBlockSummary era block =
   let blockHeader = bheader (shelleyBlockRaw block)
       blockHeaderBody = headerBody blockHeader
@@ -267,13 +269,13 @@ getTxSummary tx =
     , tpOutsCount = fromIntegral $ length $ tx ^. bodyTxL . outputsTxBodyL
     }
 
-applyBlockTxs
-  :: forall a c
-   . Crypto c
-  => ([B.ATxAux ByteString] -> a)
-  -> (forall era. EraApp era c => [Tx era] -> a)
-  -> CardanoBlock c
-  -> a
+applyBlockTxs ::
+  forall a c.
+  Crypto c =>
+  ([B.ATxAux ByteString] -> a) ->
+  (forall era. EraApp era c => [Tx era] -> a) ->
+  CardanoBlock c ->
+  a
 applyBlockTxs applyByronTxs applyNonByronTxs =
   applyBlock
     (applyByronTxs . getByronTxs)
@@ -288,10 +290,10 @@ getByronTxs byronBlock =
        in atxs
     B.ABOBBoundary _abBlock -> []
 
-getShelleyOnwardsTxs
-  :: EraApp era c
-  => ShelleyBlock (p (EraCrypto era)) era
-  -> [Tx era]
+getShelleyOnwardsTxs ::
+  EraApp era c =>
+  ShelleyBlock (p (EraCrypto era)) era ->
+  [Tx era]
 getShelleyOnwardsTxs = toList . fromTxSeq . bbody . shelleyBlockRaw
 
 getSlotNo :: Crypto c => CardanoBlock c -> SlotNo
@@ -319,11 +321,11 @@ getPraosBHeaderBody block = headerBody (bheader (shelleyBlockRaw block))
 writeTx :: forall era m. (EraTx era, MonadIO m) => FilePath -> Tx era -> m ()
 writeTx fp = liftIO . BSL.writeFile fp . serialize (eraProtVerLow @era)
 
-filterBlockWithdrawals
-  :: Crypto c
-  => Set (Credential 'Staking c)
-  -> CardanoBlock c
-  -> Map (Credential 'Staking c) Coin
+filterBlockWithdrawals ::
+  Crypto c =>
+  Set (Credential 'Staking c) ->
+  CardanoBlock c ->
+  Map (Credential 'Staking c) Coin
 filterBlockWithdrawals creds =
   applyBlockTxs (const mempty) $ \txs ->
     Map.unionsWith (<+>) $
@@ -334,35 +336,35 @@ filterBlockWithdrawals creds =
         )
         txs
 
-accScriptsStats
-  :: forall ms c
-   . (ToMaxScript ms, Crypto c)
-  => (forall era. EraApp era c => Tx era -> [AppScript])
-  -> CardanoBlock c
-  -> Map AppLanguage (ScriptsStats ms)
+accScriptsStats ::
+  forall ms c.
+  (ToMaxScript ms, Crypto c) =>
+  (forall era. EraApp era c => Tx era -> [AppScript]) ->
+  CardanoBlock c ->
+  Map AppLanguage (ScriptsStats ms)
 accScriptsStats fTx =
   applyBlockTxs (const Map.empty) (calcStatsForAppScripts fTx)
 
-calcStatsForAppScripts
-  :: (ToMaxScript ms, Foldable f, Foldable t)
-  => (a -> f AppScript)
-  -> t a
-  -> Map AppLanguage (ScriptsStats ms)
+calcStatsForAppScripts ::
+  (ToMaxScript ms, Foldable f, Foldable t) =>
+  (a -> f AppScript) ->
+  t a ->
+  Map AppLanguage (ScriptsStats ms)
 calcStatsForAppScripts f = foldl' accStats Map.empty
   where
     accStats acc =
       Map.unionWith (<>) acc . Map.map (foldMap' toScriptsStats) . scriptsPerLanguage . f
 
-languageStatsTxWits
-  :: (ToMaxScript ms, Crypto c)
-  => CardanoBlock c
-  -> Map AppLanguage (ScriptsStats ms)
+languageStatsTxWits ::
+  (ToMaxScript ms, Crypto c) =>
+  CardanoBlock c ->
+  Map AppLanguage (ScriptsStats ms)
 languageStatsTxWits = accScriptsStats $ \tx -> Map.elems $ appScriptTxWits (tx ^. witsTxL)
 
-languageStatsOutsTxBody
-  :: (ToMaxScript ms, Crypto c)
-  => CardanoBlock c
-  -> Map AppLanguage (ScriptsStats ms)
+languageStatsOutsTxBody ::
+  (ToMaxScript ms, Crypto c) =>
+  CardanoBlock c ->
+  Map AppLanguage (ScriptsStats ms)
 languageStatsOutsTxBody = accScriptsStats $ \tx -> outScriptTxBody (tx ^. bodyTxL)
 
 toScriptsStats :: ToMaxScript ms => AppScript -> ScriptsStats ms
@@ -470,3 +472,24 @@ instance Display ms => Display (ScriptsStats ms) where
       <> display lsMaxScripts
       <> " MinSize: "
       <> display lsMinSize
+
+findTransaction :: CardanoBlock StandardCrypto -> Bool
+findTransaction =
+  applyBlockTxs (const False) (any hasStakeCred)
+  where
+    stakeCred :: Credential 'Staking StandardCrypto
+    stakeCred =
+      KeyHashObj
+        ( KeyHash
+            { unKeyHash =
+                fromJust $
+                  hashFromTextAsHex "edc52808d58a420ce2df3da8c7118c858c7aa136fa7b2b1baa3e81ed"
+            }
+        )
+    hasStakeCred :: forall era. (EraApp era StandardCrypto) => Tx era -> Bool
+    hasStakeCred tx =
+      let txBody :: TxBody era
+          txBody = tx ^. bodyTxL
+          certs = txBody ^. certsTxBodyL
+       in -- withdrawals = txBody ^. withdrawalsTxBodyL
+          any (`isCertForStaking` stakeCred) certs

@@ -297,7 +297,7 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
               ReValidation ->
                 pure $ lrResult $ reapplyBlockLedgerResult ledgerCfg block (lrResult lrTick)
               _ -> error "NoValidation is not yet implemeted"
-      res <- inspectBlockState lrTickResult applyBlockGranular a
+      res@(extLedgerState', _) <- inspectBlockState lrTickResult applyBlockGranular a
       when (slotNo `Set.member` blocksToWriteSlotSet) $ do
         atomicModifyIORef' (dsAppWriteBlocks app) $
           \(slotNoSet, blockHashSet) -> ((Set.delete slotNo slotNoSet, blockHashSet), ())
@@ -307,16 +307,21 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
       when (not (Set.null blocksToWriteBlockHashSet) && blockHash' `Set.member` blocksToWriteBlockHashSet) $ do
         atomicModifyIORef' (dsAppWriteBlocks app) $ \(slotNoSet, blockHashSet) ->
           ((slotNoSet, Set.delete blockHash' blockHashSet), ())
+        -- TODO: here we use current slot for writing previous ledger state. Needs fixing
+        -- by preserving previous slot number with the state.
         writeBlockWithState slotNo block prevLedger
+      when (findTransaction block) $ do
+        writeBlockWithState slotNo block prevLedger
+        writeNewEpochStateAtSlotNo (succ slotNo) extLedgerState'
       pure res
   when (biBlocksProcessed bwi `mod` 20 == 0) logStickyStatus
   extLedgerState `seq` pure (extLedgerState, b)
 
 reportValidationError ::
-  (MonadReader (DbStreamerApp blk) m, MonadIO m, Show a, Crypto c) =>
+  (MonadReader (DbStreamerApp blk) m, MonadIO m, Show a) =>
   a ->
   SlotNo ->
-  CardanoBlock c ->
+  CardanoBlock StandardCrypto ->
   ExtLedgerState (CardanoBlock StandardCrypto) ->
   m d
 reportValidationError errorMessage slotNo block ledgerState = do
@@ -327,14 +332,15 @@ reportValidationError errorMessage slotNo block ledgerState = do
   throwString $ show errorMessage
 
 writeBlockWithState ::
-  (MonadReader (DbStreamerApp blk) m, MonadIO m, Crypto c) =>
+  (MonadReader (DbStreamerApp blk) m, MonadIO m) =>
   SlotNo ->
-  CardanoBlock c ->
+  CardanoBlock StandardCrypto ->
   ExtLedgerState (CardanoBlock StandardCrypto) ->
   m ()
-writeBlockWithState slotNo block ledgerState = do
+writeBlockWithState slotNo block extLedgerState = do
   let rawBlock = getRawBlock block
       blockHashHex = hashToTextAsHex (extractHash (rawBlockHash rawBlock))
+  writeNewEpochStateAtSlotNo slotNo extLedgerState
   mOutDir <- dsAppOutDir <$> ask
   forM_ mOutDir $ \outDir -> do
     let prefix = outDir </> show (unSlotNo slotNo) <> "_" <> T.unpack blockHashHex
@@ -342,13 +348,23 @@ writeBlockWithState slotNo block ledgerState = do
         fileNameBlock = prefix <.> "cbor"
     writeFileBinary fileNameBlock (rawBlockBytes rawBlock)
     logInfo $ "Written block to: " <> display (T.pack fileNameBlock)
-    let epochFileName = outDir </> show (unSlotNo slotNo) <.> "cbor"
-    writeNewEpochState epochFileName ledgerState
-    logInfo $ "Written NewEpochState to: " <> display (T.pack epochFileName)
     applyBlockTxs
       (liftIO . print)
       (zipWithM_ (\ix -> writeTx (mkTxFileName ix)) [0 :: Int ..])
       block
+
+writeNewEpochStateAtSlotNo ::
+  (MonadReader (DbStreamerApp blk) m, MonadIO m) =>
+  SlotNo ->
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  m ()
+writeNewEpochStateAtSlotNo slotNo extLedgerState = do
+  mOutDir <- dsAppOutDir <$> ask
+  forM_ mOutDir $ \outDir -> do
+    let epochFileName = outDir </> show (unSlotNo slotNo) <.> "cbor"
+    writeNewEpochState epochFileName extLedgerState
+    logInfo $ "Written NewEpochState to: " <> display (T.pack epochFileName)
+
 
 advanceBlock ::
   ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto)) ->

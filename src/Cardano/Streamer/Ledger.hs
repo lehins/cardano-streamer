@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -17,6 +18,9 @@ import Cardano.Ledger.Babbage.Collateral (collOuts)
 import Cardano.Ledger.Babbage.Core
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary (EncCBOR, ToCBOR)
+import Cardano.Ledger.Conway.TxCert
+import Cardano.Ledger.Credential
+import Cardano.Ledger.Keys
 import Cardano.Ledger.MemoBytes
 import Cardano.Ledger.Plutus.Language
 import Cardano.Ledger.Shelley.LedgerState (NewEpochState)
@@ -99,21 +103,34 @@ class
   -- | All of the unspent outputs produced by the transaction
   utxoTx :: Tx era -> UTxO era
 
+  isCertForStaking :: TxCert era -> Credential 'Staking (EraCrypto era) -> Bool
+
+isCertForStakingShelley :: ShelleyEraTxCert era => TxCert era -> Credential 'Staking (EraCrypto era) -> Bool
+isCertForStakingShelley txCert cred =
+  case txCert of
+    RegTxCert cred' -> cred' == cred
+    UnRegTxCert cred' -> cred' == cred
+    _ -> False
+
 instance Crypto c => EraApp (ShelleyEra c) c where
   appScript = AppMultiSig
   utxoTx tx = txouts (tx ^. bodyTxL)
+  isCertForStaking = isCertForStakingShelley
 
 instance Crypto c => EraApp (AllegraEra c) c where
   appScript = AppTimelock
   utxoTx tx = txouts (tx ^. bodyTxL)
+  isCertForStaking = isCertForStakingShelley
 
 instance Crypto c => EraApp (MaryEra c) c where
   appScript = AppTimelock
   utxoTx tx = txouts (tx ^. bodyTxL)
+  isCertForStaking = isCertForStakingShelley
 
 instance Crypto c => EraApp (AlonzoEra c) c where
   appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
   utxoTx tx = txouts (tx ^. bodyTxL)
+  isCertForStaking = isCertForStakingShelley
 
 instance Crypto c => EraApp (BabbageEra c) c where
   appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
@@ -122,6 +139,7 @@ instance Crypto c => EraApp (BabbageEra c) c where
   utxoTx tx
     | tx ^. isValidTxL == IsValid True = txouts (tx ^. bodyTxL)
     | otherwise = collOuts (tx ^. bodyTxL)
+  isCertForStaking = isCertForStakingShelley
 
 instance Crypto c => EraApp (ConwayEra c) c where
   appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
@@ -130,6 +148,14 @@ instance Crypto c => EraApp (ConwayEra c) c where
   utxoTx tx
     | tx ^. isValidTxL == IsValid True = txouts (tx ^. bodyTxL)
     | otherwise = collOuts (tx ^. bodyTxL)
+  isCertForStaking txCert cred =
+    isCertForStakingShelley txCert cred
+      || case txCert of
+        RegDepositTxCert cred' _ -> cred' == cred
+        UnRegDepositTxCert cred' _ -> cred' == cred
+        DelegTxCert cred' _ -> cred' == cred
+        RegDepositDelegTxCert cred' _ _ -> cred' == cred
+        _ -> False
 
 appTimelockScript ::
   (EraScript era, NativeScript era ~ Timelock era) => Script era -> Maybe AppScript
