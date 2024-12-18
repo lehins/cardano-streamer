@@ -29,6 +29,7 @@ module Cardano.Streamer.LedgerState (
   EpochStats (..),
   epochStatsToNamedCsv,
   toEpochStats,
+  findChange,
   pattern TickedLedgerStateAllegra,
   pattern TickedLedgerStateAlonzo,
   pattern TickedLedgerStateBabbage,
@@ -42,7 +43,8 @@ import Cardano.Chain.Block as Byron (ChainValidationState (cvsUpdateState))
 import qualified Cardano.Chain.Slotting as Byron (EpochNumber (getEpochNumber))
 import qualified Cardano.Chain.UTxO as B
 import qualified Cardano.Chain.Update.Validation.Interface as Byron (State (currentEpoch))
-import Cardano.Ledger.BaseTypes (EpochNo (..))
+import Cardano.Crypto.Hash.Class (hashFromTextAsHex)
+import Cardano.Ledger.BaseTypes (EpochNo (..), StrictMaybe (..))
 import Cardano.Ledger.Binary.Plain as Plain (Encoding, serialize, toCBOR)
 import Cardano.Ledger.CertState
 import Cardano.Ledger.Coin
@@ -60,6 +62,7 @@ import Data.Aeson (ToJSON (..), defaultOptions, fieldLabelModifier, genericToJSO
 import qualified Data.ByteString.Lazy as BSL
 import Data.Csv (Field, ToNamedRecord (..), header, namedRecord, toField, (.=))
 import qualified Data.Map.Merge.Strict as Map
+import Data.Maybe (fromJust)
 import Ouroboros.Consensus.Byron.Ledger.Block
 import Ouroboros.Consensus.Byron.Ledger.Ledger
 import Ouroboros.Consensus.Cardano.Block
@@ -85,10 +88,10 @@ encodeNewEpochState = applyNewEpochState toCBOR toCBOR
 writeNewEpochState :: (Crypto c, MonadIO m) => FilePath -> ExtLedgerState (CardanoBlock c) -> m ()
 writeNewEpochState fp = liftIO . BSL.writeFile fp . Plain.serialize . encodeNewEpochState
 
-pattern TickedLedgerStateByron
-  :: TransitionInfo
-  -> Ticked (LedgerState ByronBlock)
-  -> Ticked (LedgerState (CardanoBlock c))
+pattern TickedLedgerStateByron ::
+  TransitionInfo ->
+  Ticked (LedgerState ByronBlock) ->
+  Ticked (LedgerState (CardanoBlock c))
 pattern TickedLedgerStateByron ti st <-
   TickedHardForkLedgerState
     ti
@@ -96,10 +99,10 @@ pattern TickedLedgerStateByron ti st <-
         (TZ (State.Current{currentState = Comp st}))
       )
 
-pattern TickedLedgerStateShelley
-  :: TransitionInfo
-  -> Ticked (LedgerState (ShelleyBlock (TPraos c) (ShelleyEra c)))
-  -> Ticked (LedgerState (CardanoBlock c))
+pattern TickedLedgerStateShelley ::
+  TransitionInfo ->
+  Ticked (LedgerState (ShelleyBlock (TPraos c) (ShelleyEra c))) ->
+  Ticked (LedgerState (CardanoBlock c))
 pattern TickedLedgerStateShelley ti st <-
   TickedHardForkLedgerState
     ti
@@ -107,10 +110,10 @@ pattern TickedLedgerStateShelley ti st <-
         (TS _ (TZ (State.Current{currentState = Comp st})))
       )
 
-pattern TickedLedgerStateAllegra
-  :: TransitionInfo
-  -> Ticked (LedgerState (ShelleyBlock (TPraos c) (AllegraEra c)))
-  -> Ticked (LedgerState (CardanoBlock c))
+pattern TickedLedgerStateAllegra ::
+  TransitionInfo ->
+  Ticked (LedgerState (ShelleyBlock (TPraos c) (AllegraEra c))) ->
+  Ticked (LedgerState (CardanoBlock c))
 pattern TickedLedgerStateAllegra ti st <-
   TickedHardForkLedgerState
     ti
@@ -118,10 +121,10 @@ pattern TickedLedgerStateAllegra ti st <-
         (TS _ (TS _ (TZ (State.Current{currentState = Comp st}))))
       )
 
-pattern TickedLedgerStateMary
-  :: TransitionInfo
-  -> Ticked (LedgerState (ShelleyBlock (TPraos c) (MaryEra c)))
-  -> Ticked (LedgerState (CardanoBlock c))
+pattern TickedLedgerStateMary ::
+  TransitionInfo ->
+  Ticked (LedgerState (ShelleyBlock (TPraos c) (MaryEra c))) ->
+  Ticked (LedgerState (CardanoBlock c))
 pattern TickedLedgerStateMary ti st <-
   TickedHardForkLedgerState
     ti
@@ -129,10 +132,10 @@ pattern TickedLedgerStateMary ti st <-
         (TS _ (TS _ (TS _ (TZ (State.Current{currentState = Comp st})))))
       )
 
-pattern TickedLedgerStateAlonzo
-  :: TransitionInfo
-  -> Ticked (LedgerState (ShelleyBlock (TPraos c) (AlonzoEra c)))
-  -> Ticked (LedgerState (CardanoBlock c))
+pattern TickedLedgerStateAlonzo ::
+  TransitionInfo ->
+  Ticked (LedgerState (ShelleyBlock (TPraos c) (AlonzoEra c))) ->
+  Ticked (LedgerState (CardanoBlock c))
 pattern TickedLedgerStateAlonzo ti st <-
   TickedHardForkLedgerState
     ti
@@ -140,10 +143,10 @@ pattern TickedLedgerStateAlonzo ti st <-
         (TS _ (TS _ (TS _ (TS _ (TZ (State.Current{currentState = Comp st}))))))
       )
 
-pattern TickedLedgerStateBabbage
-  :: TransitionInfo
-  -> Ticked (LedgerState (ShelleyBlock (Praos c) (BabbageEra c)))
-  -> Ticked (LedgerState (CardanoBlock c))
+pattern TickedLedgerStateBabbage ::
+  TransitionInfo ->
+  Ticked (LedgerState (ShelleyBlock (Praos c) (BabbageEra c))) ->
+  Ticked (LedgerState (CardanoBlock c))
 pattern TickedLedgerStateBabbage ti st <-
   TickedHardForkLedgerState
     ti
@@ -151,10 +154,10 @@ pattern TickedLedgerStateBabbage ti st <-
         (TS _ (TS _ (TS _ (TS _ (TS _ (TZ (State.Current{currentState = Comp st})))))))
       )
 
-pattern TickedLedgerStateConway
-  :: TransitionInfo
-  -> Ticked (LedgerState (ShelleyBlock (Praos c) (ConwayEra c)))
-  -> Ticked (LedgerState (CardanoBlock c))
+pattern TickedLedgerStateConway ::
+  TransitionInfo ->
+  Ticked (LedgerState (ShelleyBlock (Praos c) (ConwayEra c))) ->
+  Ticked (LedgerState (CardanoBlock c))
 pattern TickedLedgerStateConway ti st <-
   TickedHardForkLedgerState
     ti
@@ -172,12 +175,12 @@ pattern TickedLedgerStateConway ti st <-
   , TickedLedgerStateConway
   #-}
 
-applyNewEpochState
-  :: Crypto c
-  => (ChainValidationState -> a)
-  -> (forall era. EraApp era c => NewEpochState era -> a)
-  -> ExtLedgerState (CardanoBlock c)
-  -> a
+applyNewEpochState ::
+  Crypto c =>
+  (ChainValidationState -> a) ->
+  (forall era. EraApp era c => NewEpochState era -> a) ->
+  ExtLedgerState (CardanoBlock c) ->
+  a
 applyNewEpochState fByronBased fShelleyBased extLedgerState =
   case ledgerState extLedgerState of
     LedgerStateByron ls -> fByronBased (byronLedgerState ls)
@@ -188,19 +191,19 @@ applyNewEpochState fByronBased fShelleyBased extLedgerState =
     LedgerStateBabbage ls -> fShelleyBased (shelleyLedgerState ls)
     LedgerStateConway ls -> fShelleyBased (shelleyLedgerState ls)
 
-applyNonByronNewEpochState
-  :: Crypto c
-  => (forall era. EraApp era c => NewEpochState era -> a)
-  -> ExtLedgerState (CardanoBlock c)
-  -> Maybe a
+applyNonByronNewEpochState ::
+  Crypto c =>
+  (forall era. EraApp era c => NewEpochState era -> a) ->
+  ExtLedgerState (CardanoBlock c) ->
+  Maybe a
 applyNonByronNewEpochState f = applyNewEpochState (const Nothing) (Just . f)
 
-applyTickedNewEpochState
-  :: Crypto c
-  => (TransitionInfo -> ChainValidationState -> a)
-  -> (forall era. EraApp era c => TransitionInfo -> NewEpochState era -> a)
-  -> Ticked (ExtLedgerState (CardanoBlock c))
-  -> a
+applyTickedNewEpochState ::
+  Crypto c =>
+  (TransitionInfo -> ChainValidationState -> a) ->
+  (forall era. EraApp era c => TransitionInfo -> NewEpochState era -> a) ->
+  Ticked (ExtLedgerState (CardanoBlock c)) ->
+  a
 applyTickedNewEpochState fByronBased fShelleyBased tickedExtLedgerState =
   case tickedLedgerState tickedExtLedgerState of
     TickedLedgerStateByron ti ls -> fByronBased ti (tickedByronLedgerState ls)
@@ -211,26 +214,26 @@ applyTickedNewEpochState fByronBased fShelleyBased tickedExtLedgerState =
     TickedLedgerStateBabbage ti ls -> fShelleyBased ti (tickedShelleyLedgerState ls)
     TickedLedgerStateConway ti ls -> fShelleyBased ti (tickedShelleyLedgerState ls)
 
-applyTickedNonByronNewEpochState
-  :: Crypto c
-  => (forall era. EraApp era c => TransitionInfo -> NewEpochState era -> a)
-  -> Ticked (ExtLedgerState (CardanoBlock c))
-  -> Maybe a
+applyTickedNonByronNewEpochState ::
+  Crypto c =>
+  (forall era. EraApp era c => TransitionInfo -> NewEpochState era -> a) ->
+  Ticked (ExtLedgerState (CardanoBlock c)) ->
+  Maybe a
 applyTickedNonByronNewEpochState f =
   applyTickedNewEpochState (\_ _ -> Nothing) (\ti -> Just . f ti)
 
-lookupStakeCredentials
-  :: Set (Credential 'Staking (EraCrypto era))
-  -> NewEpochState era
-  -> UM.StakeCredentials (EraCrypto era)
+lookupStakeCredentials ::
+  Set (Credential 'Staking (EraCrypto era)) ->
+  NewEpochState era ->
+  UM.StakeCredentials (EraCrypto era)
 lookupStakeCredentials creds nes =
   let um = dsUnified (certDState (lsCertState (esLState (nesEs nes))))
    in UM.domRestrictedStakeCredentials creds um
 
-lookupRewards
-  :: Set (Credential 'Staking (EraCrypto era))
-  -> NewEpochState era
-  -> Map (Credential 'Staking (EraCrypto era)) Coin
+lookupRewards ::
+  Set (Credential 'Staking (EraCrypto era)) ->
+  NewEpochState era ->
+  Map (Credential 'Staking (EraCrypto era)) Coin
 lookupRewards creds nes = scRewards $ lookupStakeCredentials creds nes
 
 lookupTotalRewards :: Set (Credential 'Staking (EraCrypto era)) -> NewEpochState era -> Maybe Coin
@@ -244,23 +247,23 @@ extLedgerStateEpochNo =
     (EpochNo . Byron.getEpochNumber . Byron.currentEpoch . Byron.cvsUpdateState)
     nesEL
 
-tickedExtLedgerStateEpochNo
-  :: Crypto c
-  => Ticked (ExtLedgerState (CardanoBlock c))
-  -> (TransitionInfo, EpochNo)
+tickedExtLedgerStateEpochNo ::
+  Crypto c =>
+  Ticked (ExtLedgerState (CardanoBlock c)) ->
+  (TransitionInfo, EpochNo)
 tickedExtLedgerStateEpochNo =
   applyTickedNewEpochState
     (\ti es -> (ti, EpochNo . Byron.getEpochNumber . Byron.currentEpoch $ Byron.cvsUpdateState es))
     (\ti es -> (ti, nesEL es))
 
-detectNewRewards
-  :: (Crypto c, HasLogFunc env, MonadReader env m, MonadIO m)
-  => Set (Credential 'Staking c)
-  -> EpochNo
-  -> Map (Credential 'Staking c) Coin
-  -> Map (Credential 'Staking c) Coin
-  -> Ticked (ExtLedgerState (CardanoBlock c))
-  -> m (EpochNo, Maybe (Map (Credential 'Staking c) Coin, Map (Credential 'Staking c) Coin))
+detectNewRewards ::
+  (Crypto c, HasLogFunc env, MonadReader env m, MonadIO m) =>
+  Set (Credential 'Staking c) ->
+  EpochNo ->
+  Map (Credential 'Staking c) Coin ->
+  Map (Credential 'Staking c) Coin ->
+  Ticked (ExtLedgerState (CardanoBlock c)) ->
+  m (EpochNo, Maybe (Map (Credential 'Staking c) Coin, Map (Credential 'Staking c) Coin))
 detectNewRewards creds prevEpochNo prevRewards epochWithdrawals extLedgerState = do
   let (ti, curEpochNo) = tickedExtLedgerStateEpochNo extLedgerState
   unless (curEpochNo == prevEpochNo || curEpochNo == succ prevEpochNo) $
@@ -439,26 +442,26 @@ instance Display BlockStats where
         | (lang, langStats) <- Map.toList esScriptsStatsAllRefScripts
         ]
 
-applyTickedNewEpochStateWithBlock
-  :: Crypto c
-  => (TransitionInfo -> ChainValidationState -> ByronBlock -> a)
-  -> ( forall era
-        . EraApp era c
-       => TransitionInfo
-       -> NewEpochState era
-       -> ShelleyBlock (TPraos (EraCrypto era)) era
-       -> a
-     )
-  -> ( forall era
-        . EraApp era c
-       => TransitionInfo
-       -> NewEpochState era
-       -> ShelleyBlock (Praos (EraCrypto era)) era
-       -> a
-     )
-  -> Ticked (ExtLedgerState (CardanoBlock c))
-  -> CardanoBlock c
-  -> a
+applyTickedNewEpochStateWithBlock ::
+  Crypto c =>
+  (TransitionInfo -> ChainValidationState -> ByronBlock -> a) ->
+  ( forall era.
+    EraApp era c =>
+    TransitionInfo ->
+    NewEpochState era ->
+    ShelleyBlock (TPraos (EraCrypto era)) era ->
+    a
+  ) ->
+  ( forall era.
+    EraApp era c =>
+    TransitionInfo ->
+    NewEpochState era ->
+    ShelleyBlock (Praos (EraCrypto era)) era ->
+    a
+  ) ->
+  Ticked (ExtLedgerState (CardanoBlock c)) ->
+  CardanoBlock c ->
+  a
 applyTickedNewEpochStateWithBlock fByron fTPraos fPraos tickedExtLedgerState block =
   case (tickedLedgerState tickedExtLedgerState, block) of
     (TickedLedgerStateByron ti ls, BlockByron blk) -> fByron ti (tickedByronLedgerState ls) blk
@@ -470,24 +473,24 @@ applyTickedNewEpochStateWithBlock fByron fTPraos fPraos tickedExtLedgerState blo
     (TickedLedgerStateConway ti ls, BlockConway blk) -> fPraos ti (tickedShelleyLedgerState ls) blk
     _ -> error "Impossible combination of a ledegr state and a block"
 
-applyTickedNewEpochStateWithTxs
-  :: Crypto c
-  => (ChainValidationState -> [B.ATxAux ByteString] -> a)
-  -> (forall era. EraApp era c => NewEpochState era -> [Tx era] -> a)
-  -> Ticked (ExtLedgerState (CardanoBlock c))
-  -> CardanoBlock c
-  -> a
+applyTickedNewEpochStateWithTxs ::
+  Crypto c =>
+  (ChainValidationState -> [B.ATxAux ByteString] -> a) ->
+  (forall era. EraApp era c => NewEpochState era -> [Tx era] -> a) ->
+  Ticked (ExtLedgerState (CardanoBlock c)) ->
+  CardanoBlock c ->
+  a
 applyTickedNewEpochStateWithTxs fByron fShelleyOnwards =
   applyTickedNewEpochStateWithBlock
     (\_ti cvs -> fByron cvs . getByronTxs)
     (\_ti nes -> fShelleyOnwards nes . getShelleyOnwardsTxs)
     (\_ti nes -> fShelleyOnwards nes . getShelleyOnwardsTxs)
 
-blockLanguageRefScriptsStats
-  :: Crypto c
-  => Ticked (ExtLedgerState (CardanoBlock c))
-  -> CardanoBlock c
-  -> (Map AppLanguage (ScriptsStats MaxScript), Map AppLanguage (ScriptsStats MaxScript))
+blockLanguageRefScriptsStats ::
+  Crypto c =>
+  Ticked (ExtLedgerState (CardanoBlock c)) ->
+  CardanoBlock c ->
+  (Map AppLanguage (ScriptsStats MaxScript), Map AppLanguage (ScriptsStats MaxScript))
 blockLanguageRefScriptsStats =
   applyTickedNewEpochStateWithTxs
     (\_ _ -> (Map.empty, Map.empty))
@@ -501,3 +504,23 @@ blockLanguageRefScriptsStats =
               unzip $ map (\tx -> refScriptsTxBody utxo (tx ^. bodyTxL)) txs
          in (calcStatsForAppScripts id usedRefScripts, calcStatsForAppScripts id allRefScripts)
     )
+
+findChange ::
+  ExtLedgerState (CardanoBlock StandardCrypto) -> ExtLedgerState (CardanoBlock StandardCrypto) -> Bool
+findChange extLedgerState extLedgerState' =
+  case (ledgerState extLedgerState, ledgerState extLedgerState') of
+    (LedgerStateConway prev, LedgerStateConway cur) ->
+      (setRewardToZero <$> Map.lookup cred (UM.umElems (shelleyLedgerState prev ^. unifiedL)))
+        /= (setRewardToZero <$> Map.lookup cred (UM.umElems (shelleyLedgerState cur ^. unifiedL)))
+    _ -> False
+  where
+    setRewardToZero (UM.UMElem _ ptr pool drep) = UM.UMElem (SJust (UM.RDPair mempty mempty)) ptr pool drep
+    cred :: Credential 'Staking StandardCrypto
+    cred =
+      KeyHashObj
+        ( KeyHash
+            { unKeyHash =
+                fromJust $
+                  hashFromTextAsHex "edc52808d58a420ce2df3da8c7118c858c7aa136fa7b2b1baa3e81ed"
+            }
+        )

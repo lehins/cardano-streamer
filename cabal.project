@@ -80,12 +80,13 @@ package HsOpenSSL
 --     cardano-crypto-praos
 --     cardano-crypto-tests
 
--- source-repository-package
---   type: git
---   location: https://github.com/IntersectMBO/cardano-ledger
---   tag: cb8348d3a04856b76282b9986e49b2723111eeab
---   --sha256: sha256-0j9aKQrfvEBoE4fqAo+H4Vxq5xe1P8K+OSpIxv63L3Y=
---   subdir:
+source-repository-package
+  type: git
+  location: https://github.com/IntersectMBO/cardano-ledger
+  tag: d30a7ae828e802e98277c82e278e570955afc273
+  --sha256: sha256-3UcRzlanyLfQjqTRKUoVxJHcNO9IEKzZwonM2zEG2wc=
+  subdir:
+    eras/conway/impl
 --     eras/allegra/impl
 --     eras/alonzo/impl
 --     eras/alonzo/test-suite

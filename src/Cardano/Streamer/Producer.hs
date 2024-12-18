@@ -310,7 +310,10 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
         -- TODO: here we use current slot for writing previous ledger state. Needs fixing
         -- by preserving previous slot number with the state.
         writeBlockWithState slotNo block prevLedger
-      when (findTransaction block) $ do
+      -- when (findTransaction block) $ do
+      --   writeBlockWithState slotNo block prevLedger
+      --   writeNewEpochStateAtSlotNo (succ slotNo) extLedgerState'
+      when (findChange prevLedger extLedgerState') $ do
         writeBlockWithState slotNo block prevLedger
         writeNewEpochStateAtSlotNo (succ slotNo) extLedgerState'
       pure res
