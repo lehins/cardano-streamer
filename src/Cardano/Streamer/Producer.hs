@@ -23,6 +23,7 @@ import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
 import Cardano.Streamer.LedgerState
 import Cardano.Streamer.ProtocolInfo
+import Cardano.Streamer.RTS
 import Cardano.Streamer.Time
 import Conduit
 import Control.Monad.Trans.Except
@@ -83,8 +84,10 @@ sourceBlocks blockComponent withOriginAnnTip = do
       flip fix 1 $ \loop n ->
         liftIO (ImmutableDB.iteratorNext itr) >>= \case
           ImmutableDB.IteratorExhausted -> pure ()
-          ImmutableDB.IteratorResult (slotNo, blockSize, headerSize, comp) ->
-            yield (BlockWithInfo slotNo blockSize headerSize n comp) >> loop (n + 1)
+          ImmutableDB.IteratorResult (slotNo, blockSize, headerSize, comp) -> do
+            yield (BlockWithInfo slotNo blockSize headerSize n comp)
+            writeStreamerStats slotNo
+            loop (n + 1)
     Just stopSlotNo ->
       flip fix 1 $ \loop n ->
         liftIO (ImmutableDB.iteratorNext itr) >>= \case
@@ -96,8 +99,10 @@ sourceBlocks blockComponent withOriginAnnTip = do
                     <> display slotNo
                     <> " because hard stop was requested at slot number "
                     <> display stopSlotNo
-          ImmutableDB.IteratorResult (slotNo, blockSize, headerSize, comp) ->
-            yield (BlockWithInfo slotNo blockSize headerSize n comp) >> loop (n + 1)
+          ImmutableDB.IteratorResult (slotNo, blockSize, headerSize, comp) -> do
+            yield (BlockWithInfo slotNo blockSize headerSize n comp)
+            writeStreamerStats slotNo
+            loop (n + 1)
 
 sourceBlocksWithAccState ::
   ( MonadIO m
@@ -616,6 +621,8 @@ runApp Opts{..} = do
         forM_ oOutDir (createMissingDirectory "output")
         rtsStatsFilePathMaybe <-
           forM oRTSStatsFilePath $ \rtsStatsFilePath -> do
+            -- We need to fail when stats are not enabled before we start creating files
+            checkRTSStatsEnabled
             fullPath <-
               if isAbsolute rtsStatsFilePath
                 then
@@ -650,6 +657,7 @@ runApp Opts{..} = do
         withMaybeFile rtsStatsFilePathMaybe $ \rtsStatsHandle ->
           runRIO (app{dsAppOutDir = oOutDir, dsAppRTSStatsHandle = rtsStatsHandle}) $ do
             logInfo $ "Starting to " <> display oCommand
+            writeStreamerHeader
             case oCommand of
               Replay -> void $ replayChain initLedger
               Benchmark -> void $ replayBenchmarkReport initLedger

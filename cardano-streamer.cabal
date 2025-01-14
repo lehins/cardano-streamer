@@ -25,6 +25,7 @@ library
                      , Cardano.Streamer.Producer
                      , Cardano.Streamer.ProtocolInfo
                      , Cardano.Streamer.Time
+                     , Cardano.Streamer.RTS
 
                     -- TODO: finish and reinstate when `io-classes-1.0` is in use.
                     --
