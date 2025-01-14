@@ -26,6 +26,7 @@ import Cardano.Streamer.ProtocolInfo
 import Cardano.Streamer.Time
 import Conduit
 import Control.Monad.Trans.Except
+import Data.Char (toLower)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Merge.Strict as Map
 import qualified Data.Map.Strict as Map
@@ -50,7 +51,8 @@ import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
 import Ouroboros.Consensus.Storage.Serialisation (DecodeDisk (decodeDisk))
 import Ouroboros.Consensus.Util.ResourceRegistry
-import RIO.Directory (doesDirectoryExist, listDirectory)
+import RIO.Directory (createDirectoryIfMissing, doesDirectoryExist, doesPathExist, listDirectory)
+import RIO.File (withBinaryFileDurable)
 import RIO.FilePath
 import RIO.List as List
 import qualified RIO.Set as Set
@@ -611,6 +613,30 @@ runApp Opts{..} = do
               , appConfRegistry = registry
               }
       void $ runRIO appConf $ runDbStreamerApp $ \initLedger -> do
+        forM_ oOutDir (createMissingDirectory "output")
+        rtsStatsFilePathMaybe <-
+          forM oRTSStatsFilePath $ \rtsStatsFilePath -> do
+            fullPath <-
+              if isAbsolute rtsStatsFilePath
+                then
+                  pure rtsStatsFilePath
+                else case oOutDir of
+                  Nothing ->
+                    throwString $
+                      "Supplied a relative path for RTS stats: '" <> rtsStatsFilePath <> "' without supplying the OUT_DIR"
+                  Just outDir -> pure $ outDir </> rtsStatsFilePath
+            createMissingDirectory "RTS Stats File" (dropFileName fullPath)
+            whenM (doesPathExist fullPath) $
+              throwString $
+                "Can't use an existing file for writing RTS stats: " <> fullPath
+            let ext = toLower <$> takeExtension fullPath
+            unless (ext == ".csv") $
+              logWarn $
+                "Expected a file path for a CSV file, but "
+                  <> displayShow fullPath
+                  <> " has an unexpected extension: "
+                  <> displayShow ext
+            pure fullPath
         unless (null writeBlockSlots) $
           logInfo $
             "Will try to dump blocks if they exist at slots: "
@@ -621,14 +647,24 @@ runApp Opts{..} = do
               <> mconcat
                 (intersperse "," (map display (Set.toList writeBlockHashes)))
         app <- ask
-        runRIO (app{dsAppOutDir = oOutDir}) $ do
-          logInfo $ "Starting to " <> display oCommand
-          case oCommand of
-            Replay -> void $ replayChain initLedger
-            Benchmark -> void $ replayBenchmarkReport initLedger
-            Stats -> void $ runConduit $ calcEpochStats initLedger
-            ComputeRewards creds ->
-              void $ computeRewards (Set.fromList $ NE.toList creds) initLedger
+        withMaybeFile rtsStatsFilePathMaybe $ \rtsStatsHandle ->
+          runRIO (app{dsAppOutDir = oOutDir, dsAppRTSStatsHandle = rtsStatsHandle}) $ do
+            logInfo $ "Starting to " <> display oCommand
+            case oCommand of
+              Replay -> void $ replayChain initLedger
+              Benchmark -> void $ replayBenchmarkReport initLedger
+              Stats -> void $ runConduit $ calcEpochStats initLedger
+              ComputeRewards creds ->
+                void $ computeRewards (Set.fromList $ NE.toList creds) initLedger
+  where
+    withMaybeFile mFilePath action =
+      case mFilePath of
+        Nothing -> action Nothing
+        Just fp -> withBinaryFileDurable fp WriteMode (action . Just)
+    createMissingDirectory name dir =
+      unlessM (doesDirectoryExist dir) $ do
+        logInfo $ "Creating " <> name <> " directory: " <> displayShow dir
+        createDirectoryIfMissing True dir
 
 -- -- TxOuts:
 -- total <- runRIO (app{dsAppOutDir = mOutDir}) $ countTxOuts initLedger

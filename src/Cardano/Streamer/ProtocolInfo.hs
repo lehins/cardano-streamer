@@ -239,6 +239,7 @@ runDbStreamerApp action = do
             , dsAppWriteBlocks = writeBlocksRef
             , dsAppValidationMode = appConfValidationMode appConf
             , dsAppStartTime = startTime
+            , dsAppRTSStatsHandle = Nothing
             }
     res <- runRIO app (getInitLedgerState (appConfReadDiskSnapshot appConf) >>= action)
     logInfo "withImmutableDb end"

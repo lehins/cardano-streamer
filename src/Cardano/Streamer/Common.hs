@@ -129,6 +129,7 @@ data DbStreamerApp blk = DbStreamerApp
   , dsAppWriteBlocks :: !(IORef (Set SlotNo, Set (SafeHash StandardCrypto EraIndependentBlockBody)))
   , dsAppValidationMode :: !ValidationMode
   , dsAppStartTime :: !UTCTime
+  , dsAppRTSStatsHandle :: !(Maybe Handle)
   }
 
 class HasImmutableDb env blk | env -> blk where
@@ -205,6 +206,8 @@ data Opts = Opts
   -- supplied replay will stop only at the end of the immutable chain.
   , oValidationMode :: ValidationMode
   -- ^ What is the level of ledger validation
+  , oRTSStatsFilePath :: Maybe FilePath
+  -- ^ Path to the file where RTS and GC stats for the execution should be written to.
   , oLogLevel :: LogLevel
   -- ^ Minimum log level
   , oVerbose :: Bool

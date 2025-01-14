@@ -151,6 +151,15 @@ optsParser =
           <> help "Set the validation level: 'full|re|none'. Default is 'full'"
       )
     <*> option
+      (Just <$> str)
+      ( long "rts-stats"
+          <> value Nothing
+          <> help
+            ( "Path to the file where where RTS and GC stats for the execution should be written to. "
+                <> "When relative path is supplied it will be treated relative to the OUT_DIR argument"
+            )
+      )
+    <*> option
       readLogLevel
       ( long "log-level"
           <> metavar "LOG_LEVEL"
