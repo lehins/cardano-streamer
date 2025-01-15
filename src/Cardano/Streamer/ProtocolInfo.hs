@@ -15,6 +15,7 @@ import Cardano.Ledger.BaseTypes (SlotNo (..))
 import Cardano.Streamer.Benchmark
 import Cardano.Streamer.Common
 import Cardano.Streamer.LedgerState
+import Cardano.Streamer.RTS (writeStreamerStats)
 import Codec.Serialise (Serialise (decode))
 import Control.Monad.Trans.Except
 import Ouroboros.Consensus.Block (BlockProtocol, ConvertRawHash, GetPrevHash)
@@ -184,6 +185,7 @@ readInitLedgerState ::
 readInitLedgerState diskSnapshot = do
   snapshotFilePath <- getDiskSnapshotFilePath diskSnapshot
   logInfo $ "Reading initial ledger state: " <> display (T.pack snapshotFilePath)
+  writeStreamerStats (SlotNo (dsNumber diskSnapshot))
   ledgerDbFS <- lgrHasFS . ChainDB.cdbLgrDbArgs . dsAppChainDbArgs <$> ask
   ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
   let
@@ -194,6 +196,7 @@ readInitLedgerState diskSnapshot = do
       liftIO $
         throwExceptT $
           readSnapshot ledgerDbFS extLedgerStateDecoder decode diskSnapshot
+  writeStreamerStats (SlotNo (dsNumber diskSnapshot))
   logInfo $ "Done reading the ledger state in: " <> display measure
   pure ledgerState
 

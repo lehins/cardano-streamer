@@ -142,6 +142,10 @@ writeStreamerHeader = do
 writeStreamerStats :: (MonadReader (DbStreamerApp blk) m, MonadIO m) => SlotNo -> m ()
 writeStreamerStats slotNo = do
   mHandle <- dsAppRTSStatsHandle <$> ask
-  forM_ mHandle $ \hdl -> do
-    stats <- getStreamerStats slotNo
-    hPutBuilder hdl $ lazyByteString $ CSV.encode $ CSV.encodeRecord stats
+  forM_ mHandle (writeStreamerStatsHandle slotNo)
+
+writeStreamerStatsHandle ::
+  (MonadReader (DbStreamerApp blk) m, MonadIO m) => SlotNo -> Handle -> m ()
+writeStreamerStatsHandle slotNo hdl = do
+  stats <- getStreamerStats slotNo
+  hPutBuilder hdl $ lazyByteString $ CSV.encode $ CSV.encodeRecord stats
