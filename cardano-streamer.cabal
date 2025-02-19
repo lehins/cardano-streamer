@@ -51,7 +51,7 @@ library
                      , cardano-ledger-byron
                      , cardano-ledger-core >= 1.12
                      , cardano-ledger-shelley
-                     , cardano-ledger-conway >= 1.17.4
+                     , cardano-ledger-conway >= 1.18.1
                      , cardano-protocol-tpraos
                      , cardano-slotting
                      , cassava
@@ -60,13 +60,14 @@ library
                      , contra-tracer
                      , criterion-measurement
                      , FailT
-                     , ouroboros-consensus
+                     , ouroboros-consensus >= 0.22.0.0
                      , ouroboros-consensus-protocol
-                     , ouroboros-consensus-cardano >= 0.16
+                     , ouroboros-consensus-cardano
                      , ouroboros-consensus-diffusion
                      , ouroboros-network-api
                      , io-classes
                      , nothunks
+                     , resource-registry
                      , rio
                      , serialise
                      , text
