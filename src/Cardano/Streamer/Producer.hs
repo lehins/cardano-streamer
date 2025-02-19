@@ -51,13 +51,13 @@ import Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
 import Ouroboros.Consensus.Storage.Serialisation (DecodeDisk (decodeDisk))
-import Ouroboros.Consensus.Util.ResourceRegistry
 import RIO.Directory (createDirectoryIfMissing, doesDirectoryExist, doesPathExist, listDirectory)
 import RIO.File (withBinaryFileDurable)
 import RIO.FilePath
 import RIO.List as List
 import qualified RIO.Set as Set
 import qualified RIO.Text as T
+import Control.ResourceRegistry (withRegistry)
 
 sourceBlocks ::
   ( MonadIO m

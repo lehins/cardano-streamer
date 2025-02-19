@@ -54,11 +54,11 @@ import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import qualified Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..), snapshotToFileName)
-import Ouroboros.Consensus.Util.ResourceRegistry (ResourceRegistry)
 import RIO as X hiding (RIO, runRIO)
 import RIO.FilePath
 import qualified RIO.Text as T
 import RIO.Time
+import Control.ResourceRegistry (ResourceRegistry)
 
 type RIO env = ReaderT env IO
 

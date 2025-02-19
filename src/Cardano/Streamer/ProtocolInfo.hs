@@ -22,7 +22,6 @@ import Ouroboros.Consensus.Block (BlockProtocol, ConvertRawHash, GetPrevHash)
 import Ouroboros.Consensus.Block.NestedContent (NestedCtxt)
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Config (configCodec, configStorage)
-import qualified Ouroboros.Consensus.Fragment.InFuture as InFuture
 import Ouroboros.Consensus.HeaderValidation (AnnTip)
 import Ouroboros.Consensus.Ledger.Extended (
   ExtLedgerState,
@@ -55,11 +54,12 @@ import Ouroboros.Consensus.Storage.Serialisation (
   ReconstructNestedCtxt,
  )
 import Ouroboros.Consensus.Util.CBOR (ReadIncrementalErr)
-import Ouroboros.Consensus.Util.ResourceRegistry (runWithTempRegistry)
 import Ouroboros.Network.Block (HeaderHash)
 import RIO.Directory (doesFileExist, removeFile)
 import qualified RIO.Text as T
 import RIO.Time
+import Control.ResourceRegistry (runWithTempRegistry)
+import Ouroboros.Consensus.Storage.LedgerDB.DiskPolicy (Flag(..))
 
 newtype NodeConfigError = NodeConfigError {unNodeConfigError :: Text}
   deriving (Show, Eq)
@@ -102,7 +102,6 @@ mkDbArgs dbDir ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
       updateTracer dbTracer $
         completeChainDbArgs
           registry
-          InFuture.dontCheck
           pInfoConfig
           pInfoInitLedger
           chunkInfo
@@ -164,7 +163,7 @@ writeLedgerState diskSnapshot extLedgerState = do
         <> display (T.pack snapshotFilePath)
         <> ". Removed, so it can be overwritten!"
   measure <-
-    measureAction_ $ liftIO $ writeSnapshot ledgerDbFS extLedgerStateEncoder diskSnapshot extLedgerState
+    measureAction_ $ liftIO $ writeSnapshot ledgerDbFS (Flag False) extLedgerStateEncoder diskSnapshot extLedgerState
   logInfo $
     "Written DiskSnapshot to: " <> display (T.pack snapshotFilePath) <> " in " <> display measure
   when True $ do
@@ -194,8 +193,9 @@ readInitLedgerState diskSnapshot = do
   (ledgerState, measure) <-
     measureAction $
       liftIO $
-        throwExceptT $
-          readSnapshot ledgerDbFS extLedgerStateDecoder decode diskSnapshot
+        fmap (either (error . show) id) $
+        runExceptT $
+          readSnapshot ledgerDbFS extLedgerStateDecoder decode (Flag False) diskSnapshot
   writeStreamerStats (SlotNo (dsNumber diskSnapshot))
   logInfo $ "Done reading the ledger state in: " <> display measure
   pure ledgerState
