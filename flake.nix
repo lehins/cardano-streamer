@@ -56,14 +56,14 @@
           # tools we want in our shell, from hackage
           shell.tools =
             {
-              cabal = "3.12.1.0";
+              cabal = "3.14.1.1";
               ghcid = "0.8.9";
             }
             // lib.optionalAttrs (config.compiler-nix-name == defaultCompiler) {
               # tools that work only with default compiler
-              fourmolu = "0.14.0.0";
-              hlint = "3.6.1";
-              haskell-language-server = "2.8.0.0";
+              fourmolu = "0.17.0.0"; # 0.18.x requires ghc-9.8
+              hlint = "3.8"; # 3.10 requires ghc-9.8
+              haskell-language-server = "2.9.0.1";
             };
           # and from nixpkgs or other inputs
           shell.nativeBuildInputs = with nixpkgs; [ gh jq yq-go ];
