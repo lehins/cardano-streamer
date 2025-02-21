@@ -138,17 +138,14 @@ withImmutableDb iDbArgs action = do
   logDebug "Closed an immutable database"
   pure res
 
-writeLedgerState ::
+writeExtLedgerState ::
   ( MonadIO m
   , MonadReader (DbStreamerApp (CardanoBlock StandardCrypto)) m
-  -- , EncodeDisk (CardanoBlock StandardCrypto) (LedgerState (CardanoBlock StandardCrypto))
-  -- , EncodeDisk (CardanoBlock StandardCrypto) (ChainDepState (BlockProtocol (CardanoBlock StandardCrypto)))
-  -- , EncodeDisk (CardanoBlock StandardCrypto) (AnnTip (CardanoBlock StandardCrypto))
   ) =>
   DiskSnapshot ->
   ExtLedgerState (CardanoBlock StandardCrypto) ->
   m ()
-writeLedgerState diskSnapshot extLedgerState = do
+writeExtLedgerState diskSnapshot extLedgerState = do
   ledgerDbFS <- lgrHasFS . ChainDB.cdbLgrDbArgs . dsAppChainDbArgs <$> ask
   ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
   let
@@ -172,6 +169,8 @@ writeLedgerState diskSnapshot extLedgerState = do
     measureNes <- measureAction_ $ writeNewEpochState nesFilePath extLedgerState
     logInfo $
       "Written NewEpochState to: " <> display (T.pack nesFilePath) <> " in " <> display measureNes
+
+
 
 readInitLedgerState ::
   ( DecodeDisk blk (LedgerState blk)

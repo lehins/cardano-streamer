@@ -131,7 +131,7 @@ sourceBlocksWithAccState blockComponent initState acc0 action = do
     writeSnapshots ledgerState curSlotNo = fix $ \go -> \case
       [] -> pure []
       dss@(s : ss)
-        | dsNumber s <= curSlotNo -> writeLedgerState s ledgerState >> go ss
+        | dsNumber s <= curSlotNo -> writeExtLedgerState s ledgerState >> go ss
         | otherwise -> pure dss
     loopWithSnapshotWriting !ledgerState (!acc, !dss) =
       await >>= \case
