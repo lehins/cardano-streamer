@@ -3,7 +3,7 @@
 module CLI where
 
 import Cardano.Crypto.Hash (hashFromTextAsHex)
-import Cardano.Ledger.SafeHash (unsafeMakeSafeHash)
+import Cardano.Ledger.Hashes
 import Cardano.Slotting.Slot
 import Cardano.Streamer.Common
 import qualified Data.List.NonEmpty as NE

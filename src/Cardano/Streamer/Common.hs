@@ -40,12 +40,10 @@ import qualified Cardano.Address.Style.Shelley as A
 import Cardano.Crypto.Hash.Class (hashFromBytes, hashToTextAsHex)
 import Cardano.Ledger.BaseTypes (EpochNo (..), SlotNo (..))
 import Cardano.Ledger.Credential
-import Cardano.Ledger.Crypto
 import Cardano.Ledger.Hashes
-import Cardano.Ledger.Keys
-import Cardano.Ledger.SafeHash
 import Cardano.Streamer.Time
 import Control.Monad.Trans.Except
+import Control.ResourceRegistry (ResourceRegistry)
 import Control.Tracer (Tracer (..))
 import qualified Data.Aeson as Aeson (ToJSON, ToJSONKey, encode)
 import Data.ByteString.Builder as BSL (lazyByteString)
@@ -58,7 +56,6 @@ import RIO as X hiding (RIO, runRIO)
 import RIO.FilePath
 import qualified RIO.Text as T
 import RIO.Time
-import Control.ResourceRegistry (ResourceRegistry)
 
 type RIO env = ReaderT env IO
 
@@ -72,18 +69,18 @@ deriving instance Aeson.ToJSONKey EpochNo
 instance Display DiskSnapshot where
   textDisplay = T.pack . snapshotToFileName
 
-instance Display (SafeHash a c) where
+instance Display (SafeHash a) where
   display = display . hashToTextAsHex . extractHash
 
 class HasResourceRegistry env where
   registryL :: Lens' env (ResourceRegistry IO)
 
-mkTracer
-  :: (MonadReader env m1, MonadIO m2, HasLogFunc env, Show a)
-  => Maybe Text
-  -- ^ Optional prefix for tracing messages
-  -> LogLevel
-  -> m1 (Tracer m2 a)
+mkTracer ::
+  (MonadReader env m1, MonadIO m2, HasLogFunc env, Show a) =>
+  -- | Optional prefix for tracing messages
+  Maybe Text ->
+  LogLevel ->
+  m1 (Tracer m2 a)
 mkTracer mPrefix logLevel = do
   logFunc <- view logFuncL
   return $ Tracer $ \ev ->
@@ -126,7 +123,7 @@ data DbStreamerApp blk = DbStreamerApp
   , dsAppStopSlotNo :: !(Maybe SlotNo)
   -- ^ Last slot number to execute
   , dsAppWriteDiskSnapshots :: ![DiskSnapshot]
-  , dsAppWriteBlocks :: !(IORef (Set SlotNo, Set (SafeHash StandardCrypto EraIndependentBlockBody)))
+  , dsAppWriteBlocks :: !(IORef (Set SlotNo, Set (SafeHash EraIndependentBlockBody)))
   , dsAppValidationMode :: !ValidationMode
   , dsAppStartTime :: !UTCTime
   , dsAppRTSStatsHandle :: !(Maybe Handle)
@@ -152,7 +149,7 @@ data AppConfig = AppConfig
   , appConfReadDiskSnapshot :: !(Maybe DiskSnapshot)
   , appConfWriteDiskSnapshots :: ![DiskSnapshot]
   , appConfWriteBlocksSlotNoSet :: !(Set SlotNo)
-  , appConfWriteBlocksBlockHashSet :: !(Set (SafeHash StandardCrypto EraIndependentBlockBody))
+  , appConfWriteBlocksBlockHashSet :: !(Set (SafeHash EraIndependentBlockBody))
   , appConfStopSlotNumber :: !(Maybe Word64)
   , appConfValidationMode :: !ValidationMode
   , appConfLogFunc :: !LogFunc
@@ -169,7 +166,7 @@ data Command
   = Replay
   | Benchmark
   | Stats
-  | ComputeRewards (NonEmpty (Credential 'Staking StandardCrypto))
+  | ComputeRewards (NonEmpty (Credential 'Staking))
   deriving (Show)
 
 instance Display Command where
@@ -180,7 +177,7 @@ instance Display Command where
     ComputeRewards _xs -> "Rewards" -- for: " <> intersperce "," (map displayShow xs)
 
 newtype BlockHashOrSlotNo = BlockHashOrSlotNo
-  {unBlockHashOrSlotNo :: Either SlotNo (SafeHash StandardCrypto EraIndependentBlockBody)}
+  {unBlockHashOrSlotNo :: Either SlotNo (SafeHash EraIndependentBlockBody)}
   deriving (Eq, Show)
 
 data Opts = Opts
@@ -218,7 +215,7 @@ data Opts = Opts
   }
   deriving (Show)
 
-parseStakingCredential :: MonadFail m => Text -> m (Credential 'Staking StandardCrypto)
+parseStakingCredential :: MonadFail m => Text -> m (Credential 'Staking)
 parseStakingCredential txt =
   case A.fromBech32 txt of
     Nothing -> fail "Can't parse as Bech32 Address"
@@ -248,11 +245,11 @@ getDiskSnapshotFilePath diskSnapshot = do
   chainDir <- dsAppChainDir <$> ask
   pure $ chainDir </> "ledger" </> snapshotToFileName diskSnapshot
 
-writeReport
-  :: (MonadReader (DbStreamerApp blk) m, MonadIO m, Aeson.ToJSON p, Display p)
-  => String
-  -> p
-  -> m ()
+writeReport ::
+  (MonadReader (DbStreamerApp blk) m, MonadIO m, Aeson.ToJSON p, Display p) =>
+  String ->
+  p ->
+  m ()
 writeReport name report = do
   let reportBuilder = display report
   logInfo reportBuilder
@@ -280,11 +277,11 @@ writeRecord name = writeCsv name . encode
 data NamedCsv where
   NamedCsv :: ToNamedRecord a => Csv.Header -> [a] -> NamedCsv
 
-writeNamedCsv
-  :: (MonadReader (DbStreamerApp blk) m, MonadIO m)
-  => String
-  -> NamedCsv
-  -> m ()
+writeNamedCsv ::
+  (MonadReader (DbStreamerApp blk) m, MonadIO m) =>
+  String ->
+  NamedCsv ->
+  m ()
 writeNamedCsv name (NamedCsv csvHeader csv) = writeCsv name (encodeByName csvHeader csv)
 
 writeCsv :: (MonadReader (DbStreamerApp blk) m, MonadIO m) => String -> LByteString -> m ()

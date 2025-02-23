@@ -21,7 +21,7 @@ import Cardano.Ledger.MemoBytes
 import Cardano.Ledger.Plutus.Language
 import Cardano.Ledger.Shelley.LedgerState (NewEpochState)
 import Cardano.Ledger.Shelley.Scripts
-import Cardano.Ledger.UTxO
+import Cardano.Ledger.State
 import Cardano.Streamer.Common
 import Data.Aeson
 import Data.Aeson.Types (toJSONKeyText)
@@ -83,10 +83,8 @@ class
   , EraUTxO era
   , ToCBOR (NewEpochState era)
   , EncCBOR (NewEpochState era)
-  , EraCrypto era ~ c
   ) =>
-  EraApp era c
-    | era -> c
+  EraApp era
   where
   appScript :: Script era -> AppScript
 
@@ -99,23 +97,23 @@ class
   -- | All of the unspent outputs produced by the transaction
   utxoTx :: Tx era -> UTxO era
 
-instance Crypto c => EraApp (ShelleyEra c) c where
+instance EraApp ShelleyEra where
   appScript = AppMultiSig
   utxoTx tx = txouts (tx ^. bodyTxL)
 
-instance Crypto c => EraApp (AllegraEra c) c where
+instance EraApp AllegraEra where
   appScript = AppTimelock
   utxoTx tx = txouts (tx ^. bodyTxL)
 
-instance Crypto c => EraApp (MaryEra c) c where
+instance EraApp MaryEra where
   appScript = AppTimelock
   utxoTx tx = txouts (tx ^. bodyTxL)
 
-instance Crypto c => EraApp (AlonzoEra c) c where
+instance EraApp AlonzoEra where
   appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
   utxoTx tx = txouts (tx ^. bodyTxL)
 
-instance Crypto c => EraApp (BabbageEra c) c where
+instance EraApp BabbageEra where
   appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
   appOutScriptsTxBody = babbageScriptOutsTxBody
   appRefScriptsTxBody = getAllReferenceScripts
@@ -123,7 +121,7 @@ instance Crypto c => EraApp (BabbageEra c) c where
     | tx ^. isValidTxL == IsValid True = txouts (tx ^. bodyTxL)
     | otherwise = collOuts (tx ^. bodyTxL)
 
-instance Crypto c => EraApp (ConwayEra c) c where
+instance EraApp ConwayEra where
   appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
   appOutScriptsTxBody = babbageScriptOutsTxBody
   appRefScriptsTxBody = getAllReferenceScripts
@@ -159,7 +157,7 @@ getAllReferenceScripts (UTxO mp) txBody =
 -- plutusScriptTxWits txWits =
 --   Map.mapMaybe appPlutusScriptWithLanguage (txWits ^. scriptTxWitsL)
 
-appScriptTxWits :: EraApp era c => TxWits era -> Map (ScriptHash c) AppScript
+appScriptTxWits :: EraApp era => TxWits era -> Map ScriptHash AppScript
 appScriptTxWits txWits = Map.map appScript (txWits ^. scriptTxWitsL)
 
 -- | Plutus Scripts from outputs
@@ -191,9 +189,9 @@ babbageScriptOutsTxBody txBody =
 --           pure (hashScript script, pwl)
 
 -- plutusScriptTx
---   :: (EraApp era (EraCrypto era), BabbageEraTxBody era)
+--   :: (EraApp era, BabbageEraTxBody era)
 --   => Tx era
---   -> Map (ScriptHash (EraCrypto era)) PlutusWithLanguage
+--   -> Map ScriptHash PlutusWithLanguage
 -- plutusScriptTx tx = plutusScriptTxWits (tx ^. witsTxL) <> plutusScriptOutsTxBody (tx ^. bodyTxL)
 
 -- plutusScriptsPerLanguage :: Foldable f => f PlutusWithLanguage -> Map Language (Set PlutusBinary)
@@ -213,10 +211,10 @@ scriptsPerLanguage = foldl' combinePlutusScripts mempty
 -- reference scripts. It is possible for the list to contain duplicate scripts and scripts
 -- that are not even in the Map.
 refScriptsTxBody ::
-  EraApp era c =>
+  EraApp era =>
   UTxO era ->
   TxBody era ->
-  (Map (ScriptHash c) AppScript, [AppScript])
+  (Map ScriptHash AppScript, [AppScript])
 refScriptsTxBody utxo txBody =
   (refScriptsUsed, map appScript refScripts)
   where
@@ -228,7 +226,7 @@ refScriptsTxBody utxo txBody =
         (refScriptsProvided `Map.restrictKeys` scriptHashesNeeded)
           `Map.union` Map.filter isNativeScript refScriptsProvided
 
-outScriptTxBody :: EraApp era c => TxBody era -> [AppScript]
+outScriptTxBody :: EraApp era => TxBody era -> [AppScript]
 outScriptTxBody = map appScript . appOutScriptsTxBody
 
 -- plutusOutScriptTxBody :: EraApp era c => TxBody era -> [PlutusWithLanguage]

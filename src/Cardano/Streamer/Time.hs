@@ -107,13 +107,13 @@ maxTimeDepth :: Time t -> Int
 maxTimeDepth (Time _ Nothing) = 1
 maxTimeDepth (Time _ (Just t)) = 1 + maxTimeDepth t
 
-defaultShowTime
-  :: forall t
-   . (BoundedInterval t, Interval (SubTime t))
-  => Maybe Int
-  -> Bool
-  -> Time t
-  -> String
+defaultShowTime ::
+  forall t.
+  (BoundedInterval t, Interval (SubTime t)) =>
+  Maybe Int ->
+  Bool ->
+  Time t ->
+  String
 defaultShowTime mDepth isConcise t@(Time i mSub) =
   case mSub of
     Nothing

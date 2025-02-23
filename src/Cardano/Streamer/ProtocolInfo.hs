@@ -18,6 +18,7 @@ import Cardano.Streamer.LedgerState
 import Cardano.Streamer.RTS (writeStreamerStats)
 import Codec.Serialise (Serialise (decode))
 import Control.Monad.Trans.Except
+import Control.ResourceRegistry (runWithTempRegistry)
 import Ouroboros.Consensus.Block (BlockProtocol, ConvertRawHash, GetPrevHash)
 import Ouroboros.Consensus.Block.NestedContent (NestedCtxt)
 import Ouroboros.Consensus.Cardano.Block
@@ -41,6 +42,7 @@ import Ouroboros.Consensus.Storage.ChainDB.Impl.Args (
 import Ouroboros.Consensus.Storage.ChainDB.Impl.LgrDB (lgrHasFS)
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import Ouroboros.Consensus.Storage.ImmutableDB.Impl (ImmutableDbArgs)
+import Ouroboros.Consensus.Storage.LedgerDB.DiskPolicy (Flag (..))
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (
   DiskSnapshot (..),
   readSnapshot,
@@ -58,8 +60,6 @@ import Ouroboros.Network.Block (HeaderHash)
 import RIO.Directory (doesFileExist, removeFile)
 import qualified RIO.Text as T
 import RIO.Time
-import Control.ResourceRegistry (runWithTempRegistry)
-import Ouroboros.Consensus.Storage.LedgerDB.DiskPolicy (Flag(..))
 
 newtype NodeConfigError = NodeConfigError {unNodeConfigError :: Text}
   deriving (Show, Eq)
@@ -160,7 +160,9 @@ writeExtLedgerState diskSnapshot extLedgerState = do
         <> display (T.pack snapshotFilePath)
         <> ". Removed, so it can be overwritten!"
   measure <-
-    measureAction_ $ liftIO $ writeSnapshot ledgerDbFS (Flag False) extLedgerStateEncoder diskSnapshot extLedgerState
+    measureAction_ $
+      liftIO $
+        writeSnapshot ledgerDbFS (Flag False) extLedgerStateEncoder diskSnapshot extLedgerState
   logInfo $
     "Written DiskSnapshot to: " <> display (T.pack snapshotFilePath) <> " in " <> display measure
   when True $ do
@@ -169,8 +171,6 @@ writeExtLedgerState diskSnapshot extLedgerState = do
     measureNes <- measureAction_ $ writeNewEpochState nesFilePath extLedgerState
     logInfo $
       "Written NewEpochState to: " <> display (T.pack nesFilePath) <> " in " <> display measureNes
-
-
 
 readInitLedgerState ::
   ( DecodeDisk blk (LedgerState blk)
@@ -193,8 +193,8 @@ readInitLedgerState diskSnapshot = do
     measureAction $
       liftIO $
         fmap (either (error . show) id) $
-        runExceptT $
-          readSnapshot ledgerDbFS extLedgerStateDecoder decode (Flag False) diskSnapshot
+          runExceptT $
+            readSnapshot ledgerDbFS extLedgerStateDecoder decode (Flag False) diskSnapshot
   writeStreamerStats (SlotNo (dsNumber diskSnapshot))
   logInfo $ "Done reading the ledger state in: " <> display measure
   pure ledgerState

@@ -14,9 +14,7 @@ import Cardano.Crypto.Hash.Class (hashToTextAsHex)
 import Cardano.Ledger.Binary.Plain (decodeFullDecoder)
 import Cardano.Ledger.Coin
 import Cardano.Ledger.Credential
-import Cardano.Ledger.Crypto
-import Cardano.Ledger.Keys
-import Cardano.Ledger.SafeHash (extractHash)
+import Cardano.Ledger.Hashes
 import Cardano.Slotting.Slot (WithOrigin (..))
 import Cardano.Streamer.Benchmark
 import Cardano.Streamer.BlockInfo
@@ -27,6 +25,7 @@ import Cardano.Streamer.RTS
 import Cardano.Streamer.Time
 import Conduit
 import Control.Monad.Trans.Except
+import Control.ResourceRegistry (withRegistry)
 import Data.Char (toLower)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Merge.Strict as Map
@@ -57,7 +56,6 @@ import RIO.FilePath
 import RIO.List as List
 import qualified RIO.Set as Set
 import qualified RIO.Text as T
-import Control.ResourceRegistry (withRegistry)
 
 sourceBlocks ::
   ( MonadIO m
@@ -320,7 +318,7 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
   extLedgerState `seq` pure (extLedgerState, b)
 
 reportValidationError ::
-  (MonadReader (DbStreamerApp blk) m, MonadIO m, Show a, Crypto c) =>
+  (MonadReader (DbStreamerApp blk) m, MonadIO m, Show a) =>
   a ->
   SlotNo ->
   CardanoBlock c ->
@@ -334,7 +332,7 @@ reportValidationError errorMessage slotNo block ledgerState = do
   throwString $ show errorMessage
 
 writeBlockWithState ::
-  (MonadReader (DbStreamerApp blk) m, MonadIO m, Crypto c) =>
+  (MonadReader (DbStreamerApp blk) m, MonadIO m) =>
   SlotNo ->
   CardanoBlock c ->
   ExtLedgerState (CardanoBlock StandardCrypto) ->
@@ -418,11 +416,7 @@ advanceBlockStats els blk =
 
 calcEpochStats ::
   ExtLedgerState (CardanoBlock StandardCrypto) ->
-  ConduitT
-    a
-    c
-    (RIO (DbStreamerApp (CardanoBlock StandardCrypto)))
-    EpochStats
+  ConduitT a c (RIO (DbStreamerApp (CardanoBlock StandardCrypto))) EpochStats
 calcEpochStats initLedgerState = do
   epochStats <-
     void (sourceBlocksWithState GetBlock initLedgerState advanceBlockStats)
@@ -432,29 +426,29 @@ calcEpochStats initLedgerState = do
   logInfo $ "Final summary: \n    " <> display (fold $ unEpochStats epochStats)
   pure epochStats
 
-data RewardsState c = RewardsState
+data RewardsState = RewardsState
   { curEpoch :: !EpochNo
-  , curEpochRewards :: !(Map (Credential 'Staking c) Coin)
-  , curEpochWithdrawals :: !(Map (Credential 'Staking c) Coin)
+  , curEpochRewards :: !(Map (Credential 'Staking) Coin)
+  , curEpochWithdrawals :: !(Map (Credential 'Staking) Coin)
   }
-data RewardsPerEpoch c = RewardsPerEpoch
+data RewardsPerEpoch = RewardsPerEpoch
   { rewardsEpochNo :: !EpochNo
-  , rewardsReceivedThisEpoch :: !(Map (Credential 'Staking c) Coin)
-  , rewardsWithdrawnThisEpoch :: !(Map (Credential 'Staking c) Coin)
+  , rewardsReceivedThisEpoch :: !(Map (Credential 'Staking) Coin)
+  , rewardsWithdrawnThisEpoch :: !(Map (Credential 'Staking) Coin)
   }
 
-instance Display (RewardsPerEpoch StandardCrypto) where
+instance Display RewardsPerEpoch where
   display RewardsPerEpoch{..} =
     mconcat $
       [ "Rewards Per Epoch: "
       , display (unEpochNo rewardsEpochNo)
       ]
         ++ [ "\n    "
-              <> displayShow cred
-              <> ": "
-              <> display rew
-              <> "  "
-              <> display wdrl
+               <> displayShow cred
+               <> ": "
+               <> display rew
+               <> "  "
+               <> display wdrl
            | (cred, (Coin rew, Coin wdrl)) <- Map.toList rewardsAndWithdrawals
            ]
     where
@@ -467,16 +461,16 @@ instance Display (RewardsPerEpoch StandardCrypto) where
           rewardsWithdrawnThisEpoch
 
 accumNewRewards ::
-  Set (Credential 'Staking StandardCrypto) ->
+  Set (Credential 'Staking) ->
   ExtLedgerState (CardanoBlock StandardCrypto) ->
-  RewardsState StandardCrypto ->
+  RewardsState ->
   BlockWithInfo (CardanoBlock StandardCrypto) ->
   ReaderT
     (DbStreamerApp (CardanoBlock StandardCrypto))
     IO
     ( ExtLedgerState (CardanoBlock StandardCrypto)
-    , RewardsState StandardCrypto
-    , Maybe (RewardsPerEpoch StandardCrypto)
+    , RewardsState
+    , Maybe RewardsPerEpoch
     )
 accumNewRewards creds prevExtLedgerState rs bwi = do
   let calcRewards tels _els =
@@ -550,9 +544,9 @@ replayChain initLedgerState = do
   runConduit $ foldBlocksWithState GetBlock initLedgerState advanceBlock_
 
 computeRewards ::
-  Set (Credential 'Staking StandardCrypto) ->
+  Set (Credential 'Staking) ->
   ExtLedgerState (CardanoBlock StandardCrypto) ->
-  RIO (DbStreamerApp (CardanoBlock StandardCrypto)) [RewardsPerEpoch StandardCrypto]
+  RIO (DbStreamerApp (CardanoBlock StandardCrypto)) [RewardsPerEpoch]
 computeRewards creds initLedgerState = do
   -- (extLedgerState, rs) <-
   runConduit $

@@ -24,10 +24,8 @@ import Cardano.Ledger.Block
 import Cardano.Ledger.Coin
 import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
-import Cardano.Ledger.Crypto
-import Cardano.Ledger.Keys
-import Cardano.Ledger.SafeHash
 import Cardano.Ledger.Val
+import Cardano.Protocol.Crypto
 import Cardano.Protocol.TPraos.BHeader
 import Cardano.Streamer.Common
 import Cardano.Streamer.Ledger
@@ -107,27 +105,26 @@ fromByronProtocolVersion pv =
     , pvMinor = fromIntegral $ B.pvMinor pv
     }
 
-data RawBlock c = RawBlock
+data RawBlock = RawBlock
   { rawBlockBytes :: !ByteString
-  , rawBlockHash :: SafeHash c EraIndependentBlockBody
+  , rawBlockHash :: SafeHash EraIndependentBlockBody
   }
 
-instance SafeToHash (RawBlock c) where
+instance SafeToHash RawBlock where
   originalBytes = rawBlockBytes
 
-instance HashAnnotated (RawBlock c) EraIndependentBlockBody c
+instance HashAnnotated RawBlock EraIndependentBlockBody
 
-getCardanoEra :: Crypto c => CardanoBlock c -> CardanoEra
+getCardanoEra :: CardanoBlock c -> CardanoEra
 getCardanoEra =
   applyBlock (\_ -> Byron) (\era _ -> era) (\era _ -> era)
 
-applyBlock
-  :: Crypto c
-  => (ByronBlock -> a)
-  -> (forall era. EraApp era c => CardanoEra -> ShelleyBlock (TPraos (EraCrypto era)) era -> a)
-  -> (forall era. EraApp era c => CardanoEra -> ShelleyBlock (Praos (EraCrypto era)) era -> a)
-  -> CardanoBlock c
-  -> a
+applyBlock ::
+  (ByronBlock -> a) ->
+  (forall era. EraApp era => CardanoEra -> ShelleyBlock (TPraos c) era -> a) ->
+  (forall era. EraApp era => CardanoEra -> ShelleyBlock (Praos c) era -> a) ->
+  CardanoBlock c ->
+  a
 applyBlock applyBronBlock applyTPraosBlock applyPraosBlock = \case
   BlockByron byronBlock -> applyBronBlock byronBlock
   BlockShelley shelleyBlock -> applyTPraosBlock Shelley shelleyBlock
@@ -137,7 +134,7 @@ applyBlock applyBronBlock applyTPraosBlock applyPraosBlock = \case
   BlockBabbage babbageBlock -> applyPraosBlock Babbage babbageBlock
   BlockConway conwayBlock -> applyPraosBlock Conway conwayBlock
 
-getRawBlock :: Crypto c => CardanoBlock c -> RawBlock c
+getRawBlock :: CardanoBlock c -> RawBlock
 getRawBlock =
   mkRawBlock . applyBlock byronBlockBytes blockBytes blockBytes
   where
@@ -205,11 +202,11 @@ getBlockSummary =
                 , bpTxsSummary = V.empty
                 }
 
-getTPraosBlockSummary
-  :: (EraSegWits era, Crypto c)
-  => CardanoEra
-  -> ShelleyBlock (TPraos c) era
-  -> BlockSummary
+getTPraosBlockSummary ::
+  (EraSegWits era, Crypto c) =>
+  CardanoEra ->
+  ShelleyBlock (TPraos c) era ->
+  BlockSummary
 getTPraosBlockSummary era block =
   let (blockHeaderBody, blockHeaderSize) =
         case bheader (shelleyBlockRaw block) of
@@ -230,11 +227,11 @@ getTPraosBlockSummary era block =
           , bpTxsSummary = getTxsSummary txsSeq
           }
 
-getPraosBlockSummary
-  :: (EraSegWits era, Crypto c)
-  => CardanoEra
-  -> ShelleyBlock (Praos c) era
-  -> BlockSummary
+getPraosBlockSummary ::
+  (EraSegWits era, Crypto c) =>
+  CardanoEra ->
+  ShelleyBlock (Praos c) era ->
+  BlockSummary
 getPraosBlockSummary era block =
   let blockHeader = bheader (shelleyBlockRaw block)
       blockHeaderBody = headerBody blockHeader
@@ -267,13 +264,12 @@ getTxSummary tx =
     , tpOutsCount = fromIntegral $ length $ tx ^. bodyTxL . outputsTxBodyL
     }
 
-applyBlockTxs
-  :: forall a c
-   . Crypto c
-  => ([B.ATxAux ByteString] -> a)
-  -> (forall era. EraApp era c => [Tx era] -> a)
-  -> CardanoBlock c
-  -> a
+applyBlockTxs ::
+  forall a c.
+  ([B.ATxAux ByteString] -> a) ->
+  (forall era. EraApp era => [Tx era] -> a) ->
+  CardanoBlock c ->
+  a
 applyBlockTxs applyByronTxs applyNonByronTxs =
   applyBlock
     (applyByronTxs . getByronTxs)
@@ -288,10 +284,10 @@ getByronTxs byronBlock =
        in atxs
     B.ABOBBoundary _abBlock -> []
 
-getShelleyOnwardsTxs
-  :: EraApp era c
-  => ShelleyBlock (p (EraCrypto era)) era
-  -> [Tx era]
+getShelleyOnwardsTxs ::
+  EraApp era =>
+  ShelleyBlock (p c) era ->
+  [Tx era]
 getShelleyOnwardsTxs = toList . fromTxSeq . bbody . shelleyBlockRaw
 
 getSlotNo :: Crypto c => CardanoBlock c -> SlotNo
@@ -319,11 +315,10 @@ getPraosBHeaderBody block = headerBody (bheader (shelleyBlockRaw block))
 writeTx :: forall era m. (EraTx era, MonadIO m) => FilePath -> Tx era -> m ()
 writeTx fp = liftIO . BSL.writeFile fp . serialize (eraProtVerLow @era)
 
-filterBlockWithdrawals
-  :: Crypto c
-  => Set (Credential 'Staking c)
-  -> CardanoBlock c
-  -> Map (Credential 'Staking c) Coin
+filterBlockWithdrawals ::
+  Set (Credential 'Staking) ->
+  CardanoBlock c ->
+  Map (Credential 'Staking) Coin
 filterBlockWithdrawals creds =
   applyBlockTxs (const mempty) $ \txs ->
     Map.unionsWith (<+>) $
@@ -334,35 +329,35 @@ filterBlockWithdrawals creds =
         )
         txs
 
-accScriptsStats
-  :: forall ms c
-   . (ToMaxScript ms, Crypto c)
-  => (forall era. EraApp era c => Tx era -> [AppScript])
-  -> CardanoBlock c
-  -> Map AppLanguage (ScriptsStats ms)
+accScriptsStats ::
+  forall ms c.
+  ToMaxScript ms =>
+  (forall era. EraApp era => Tx era -> [AppScript]) ->
+  CardanoBlock c ->
+  Map AppLanguage (ScriptsStats ms)
 accScriptsStats fTx =
   applyBlockTxs (const Map.empty) (calcStatsForAppScripts fTx)
 
-calcStatsForAppScripts
-  :: (ToMaxScript ms, Foldable f, Foldable t)
-  => (a -> f AppScript)
-  -> t a
-  -> Map AppLanguage (ScriptsStats ms)
+calcStatsForAppScripts ::
+  (ToMaxScript ms, Foldable f, Foldable t) =>
+  (a -> f AppScript) ->
+  t a ->
+  Map AppLanguage (ScriptsStats ms)
 calcStatsForAppScripts f = foldl' accStats Map.empty
   where
     accStats acc =
       Map.unionWith (<>) acc . Map.map (foldMap' toScriptsStats) . scriptsPerLanguage . f
 
-languageStatsTxWits
-  :: (ToMaxScript ms, Crypto c)
-  => CardanoBlock c
-  -> Map AppLanguage (ScriptsStats ms)
+languageStatsTxWits ::
+  ToMaxScript ms =>
+  CardanoBlock c ->
+  Map AppLanguage (ScriptsStats ms)
 languageStatsTxWits = accScriptsStats $ \tx -> Map.elems $ appScriptTxWits (tx ^. witsTxL)
 
-languageStatsOutsTxBody
-  :: (ToMaxScript ms, Crypto c)
-  => CardanoBlock c
-  -> Map AppLanguage (ScriptsStats ms)
+languageStatsOutsTxBody ::
+  ToMaxScript ms =>
+  CardanoBlock c ->
+  Map AppLanguage (ScriptsStats ms)
 languageStatsOutsTxBody = accScriptsStats $ \tx -> outScriptTxBody (tx ^. bodyTxL)
 
 toScriptsStats :: ToMaxScript ms => AppScript -> ScriptsStats ms

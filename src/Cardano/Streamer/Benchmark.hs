@@ -10,7 +10,6 @@
 
 module Cardano.Streamer.Benchmark where
 
-import Cardano.Ledger.Crypto
 import Cardano.Streamer.Common
 import Cardano.Streamer.LedgerState (extLedgerStateEpochNo, tickedExtLedgerStateEpochNo)
 import Cardano.Streamer.Time
@@ -109,27 +108,27 @@ measureAction action = do
 measureAction_ :: MonadIO m => m a -> m Measure
 measureAction_ action = snd <$> measureAction action
 
-withBenchmarking
-  :: forall c m mc a b
-   . (Crypto c, MonadIO mc, MonadIO m)
-  => ( (m (CardanoBlock c) -> m (CardanoBlock c, Measure))
-       -> ( ExtLedgerState (CardanoBlock c)
-            -> Ticked (ExtLedgerState (CardanoBlock c))
-            -> SlotNo
-            -> m TickStat
-          )
-       -> (m a -> (Measure, TickStat) -> m (a, Stat))
-       -> mc b
-     )
-  -> mc b
+withBenchmarking ::
+  forall c m mc a b.
+  (MonadIO mc, MonadIO m) =>
+  ( (m (CardanoBlock c) -> m (CardanoBlock c, Measure)) ->
+    ( ExtLedgerState (CardanoBlock c) ->
+      Ticked (ExtLedgerState (CardanoBlock c)) ->
+      SlotNo ->
+      m TickStat
+    ) ->
+    (m a -> (Measure, TickStat) -> m (a, Stat)) ->
+    mc b
+  ) ->
+  mc b
 withBenchmarking f = do
   let
     benchDecode decodeBlock = measureAction decodeBlock
-    benchRunTick
-      :: ExtLedgerState (CardanoBlock c)
-      -> Ticked (ExtLedgerState (CardanoBlock c))
-      -> SlotNo
-      -> m TickStat
+    benchRunTick ::
+      ExtLedgerState (CardanoBlock c) ->
+      Ticked (ExtLedgerState (CardanoBlock c)) ->
+      SlotNo ->
+      m TickStat
     benchRunTick prevLedgerState tickedLedgerState slotNo = do
       measure <- measureAction_ (pure tickedLedgerState)
       let prevEpochNo = extLedgerStateEpochNo prevLedgerState
