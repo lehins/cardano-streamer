@@ -9,6 +9,7 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 
 module Cardano.Streamer.LedgerState (
@@ -29,6 +30,8 @@ module Cardano.Streamer.LedgerState (
   EpochStats (..),
   epochStatsToNamedCsv,
   toEpochStats,
+  Tip (..),
+  tipFromExtLedgerState,
   pattern TickedLedgerStateAllegra,
   pattern TickedLedgerStateAlonzo,
   pattern TickedLedgerStateBabbage,
@@ -38,11 +41,17 @@ module Cardano.Streamer.LedgerState (
   pattern TickedLedgerStateShelley,
 ) where
 
-import Cardano.Chain.Block as Byron (ChainValidationState (cvsUpdateState))
-import qualified Cardano.Chain.Slotting as Byron (EpochNumber (getEpochNumber))
+import Cardano.Chain.Block as Byron (ChainValidationState (..))
+import qualified Cardano.Chain.Genesis as Byron (GenesisHash (..))
+import qualified Cardano.Chain.Slotting as Byron (
+  EpochNumber (getEpochNumber),
+  SlotNumber (unSlotNumber),
+ )
 import qualified Cardano.Chain.UTxO as B
 import qualified Cardano.Chain.Update.Validation.Interface as Byron (State (currentEpoch))
-import Cardano.Ledger.BaseTypes (EpochNo (..))
+import Cardano.Crypto.Hash (hashFromBytes)
+import qualified Cardano.Crypto.Hashing as Byron (hashToBytes)
+import Cardano.Ledger.BaseTypes (BlockNo (..))
 import Cardano.Ledger.Binary.Plain as Plain (Encoding, serialize, toCBOR)
 import Cardano.Ledger.CertState
 import Cardano.Ledger.Coin
@@ -51,6 +60,7 @@ import Cardano.Ledger.Credential
 import Cardano.Ledger.Shelley.LedgerState hiding (LedgerState)
 import Cardano.Ledger.UMap as UM
 import Cardano.Ledger.Val
+import Cardano.Slotting.Slot
 import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
 import Cardano.Streamer.Ledger
@@ -58,24 +68,27 @@ import Data.Aeson (ToJSON (..), defaultOptions, fieldLabelModifier, genericToJSO
 import qualified Data.ByteString.Lazy as BSL
 import Data.Csv (Field, ToNamedRecord (..), header, namedRecord, toField, (.=))
 import qualified Data.Map.Merge.Strict as Map
+import Data.Maybe (fromJust)
+import Data.SOP.BasicFunctors
+import Data.SOP.Telescope
 import Ouroboros.Consensus.Byron.Ledger.Block
 import Ouroboros.Consensus.Byron.Ledger.Ledger
 import Ouroboros.Consensus.Cardano.Block
+import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (OneEraTipInfo (..))
+import Ouroboros.Consensus.HardFork.Combinator.Ledger
+import Ouroboros.Consensus.HardFork.Combinator.State.Types as State
+import Ouroboros.Consensus.HeaderValidation (
+  AnnTip (..),
+  HeaderState (..),
+  TipInfoIsEBB (..),
+ )
 import Ouroboros.Consensus.Ledger.Extended
 import Ouroboros.Consensus.Protocol.Praos
 import Ouroboros.Consensus.Protocol.TPraos
-
--- import Ouroboros.Consensus.Shelley.Ledger (shelleyLedgerState)
 import Ouroboros.Consensus.Shelley.Ledger.Block
 import Ouroboros.Consensus.Shelley.Ledger.Ledger
+import Ouroboros.Consensus.TypeFamilyWrappers (WrapTipInfo (..))
 import qualified RIO.Map as Map
-
-import Data.SOP.BasicFunctors
-import Data.SOP.Telescope
-
--- import Ouroboros.Consensus.Cardano.Block
-import Ouroboros.Consensus.HardFork.Combinator.Ledger
-import Ouroboros.Consensus.HardFork.Combinator.State.Types as State
 
 encodeNewEpochState :: ExtLedgerState (CardanoBlock c) -> Encoding
 encodeNewEpochState = applyNewEpochState toCBOR toCBOR
@@ -169,6 +182,78 @@ pattern TickedLedgerStateConway ti st <-
   , TickedLedgerStateBabbage
   , TickedLedgerStateConway
   #-}
+
+data Tip = Tip
+  { tipSlotNo :: SlotNo
+  , tipPrevBlockNo :: BlockNo
+  , tipPrevBlockHeaderHash :: Hash HASH EraIndependentBlockHeader
+  }
+  deriving (Eq, Ord, Show)
+
+instance Display Tip where
+  display Tip{..} =
+    "Tip<SlotNo: "
+      <> display tipSlotNo
+      <> ", PrevBlockNo: "
+      <> display tipPrevBlockNo
+      <> ", PrevBlockHeaderHash: "
+      <> display tipPrevBlockHeaderHash
+      <> ">"
+
+tipFromExtLedgerState ::
+  ExtLedgerState (CardanoBlock StandardCrypto) -> Maybe Tip
+tipFromExtLedgerState extLedgerState =
+  if mAnnTip == mTip
+    then mTip
+    else
+      error $ "AnnTip /= StateTip: " ++ show mAnnTip ++ " /= " ++ show mTip
+  where
+    mAnnTip = do
+      AnnTip{..} <- withOriginToMaybe $ headerStateTip (headerState extLedgerState)
+      pure $
+        Tip
+          { tipSlotNo = annTipSlotNo
+          , tipPrevBlockNo = annTipBlockNo
+          , tipPrevBlockHeaderHash =
+              case fromTip $ getOneEraTipInfo annTipInfo of
+                TS _ (TS _ (TS _ (TS _ (TS _ (TS _ (TZ (WrapTipInfo headerHash))))))) -> unShelleyHash headerHash
+                TS _ (TS _ (TS _ (TS _ (TS _ (TZ (WrapTipInfo headerHash)))))) -> unShelleyHash headerHash
+                TS _ (TS _ (TS _ (TS _ (TZ (WrapTipInfo headerHash))))) -> unShelleyHash headerHash
+                TS _ (TS _ (TS _ (TZ (WrapTipInfo headerHash)))) -> unShelleyHash headerHash
+                TS _ (TS _ (TZ (WrapTipInfo headerHash))) -> unShelleyHash headerHash
+                TS _ (TZ (WrapTipInfo headerHash)) -> unShelleyHash headerHash
+                TZ (WrapTipInfo (TipInfoIsEBB (ByronHash headerHash) _)) -> fromByronHash headerHash
+          }
+    fromByronHash = fromJust . hashFromBytes . Byron.hashToBytes
+    toByronTip ls = do
+      blockNo <- withOriginToMaybe $ byronLedgerTipBlockNo ls
+      let chainValidationState = byronLedgerState ls
+      pure $
+        Tip
+          { tipSlotNo = SlotNo $ Byron.unSlotNumber $ cvsLastSlot chainValidationState
+          , tipPrevBlockNo = blockNo
+          , tipPrevBlockHeaderHash =
+              case cvsPreviousHash chainValidationState of
+                Left (Byron.GenesisHash genesisHash) -> fromByronHash genesisHash
+                Right headerHash -> fromByronHash headerHash
+          }
+    toShelleyTip ls = do
+      ShelleyTip{..} <- withOriginToMaybe $ shelleyLedgerTip ls
+      pure $
+        Tip
+          { tipSlotNo = shelleyTipSlotNo
+          , tipPrevBlockNo = shelleyTipBlockNo
+          , tipPrevBlockHeaderHash = unShelleyHash shelleyTipHash
+          }
+    mTip =
+      case ledgerState extLedgerState of
+        LedgerStateByron ls -> toByronTip ls
+        LedgerStateShelley ls -> toShelleyTip ls
+        LedgerStateAllegra ls -> toShelleyTip ls
+        LedgerStateMary ls -> toShelleyTip ls
+        LedgerStateAlonzo ls -> toShelleyTip ls
+        LedgerStateBabbage ls -> toShelleyTip ls
+        LedgerStateConway ls -> toShelleyTip ls
 
 applyNewEpochState ::
   (ChainValidationState -> a) ->

@@ -131,23 +131,32 @@ sourceBlocksWithAccState blockComponent initState acc0 action = do
       dss@(s : ss)
         | dsNumber s <= curSlotNo -> writeExtLedgerState s ledgerState >> go ss
         | otherwise -> pure dss
-    loopWithSnapshotWriting !ledgerState (!acc, !dss) =
+    loopWithSnapshotWriting !extLedgerState (!acc, !dss) =
       await >>= \case
-        Nothing -> pure (ledgerState, acc)
+        Nothing -> pure (extLedgerState, acc)
         Just bwi -> do
-          (ledgerState', acc', c) <- lift $ action ledgerState acc bwi
+          (extLedgerState', acc', c) <- lift $ action extLedgerState acc bwi
           yield c
           let SlotNo curSlotNo = biSlotNo bwi
-          writeSnapshots ledgerState' curSlotNo dss >>= \case
-            [] -> loopWithoutSnapshotWriting ledgerState' acc'
-            ss -> loopWithSnapshotWriting ledgerState' (acc', ss)
-    loopWithoutSnapshotWriting !ledgerState !acc =
+          case tipFromExtLedgerState extLedgerState' of
+            Just t ->
+              logDebug $ "CurSlotNo: " <> display curSlotNo <> " " <> display t
+            Nothing -> error $ "WTF: " <> show curSlotNo
+          writeSnapshots extLedgerState' curSlotNo dss >>= \case
+            [] -> loopWithoutSnapshotWriting extLedgerState' acc'
+            ss -> loopWithSnapshotWriting extLedgerState' (acc', ss)
+    loopWithoutSnapshotWriting !extLedgerState !acc =
       await >>= \case
-        Nothing -> pure (ledgerState, acc)
+        Nothing -> pure (extLedgerState, acc)
         Just bwi -> do
-          (ledgerState', acc', c) <- lift $ action ledgerState acc bwi
+          (extLedgerState', acc', c) <- lift $ action extLedgerState acc bwi
+          let SlotNo curSlotNo = biSlotNo bwi
+          case tipFromExtLedgerState extLedgerState' of
+            Just t ->
+              logDebug $ "CurSlotNo: " <> display curSlotNo <> " " <> display t
+            Nothing -> error $ "WTF: " <> show curSlotNo
           yield c
-          loopWithoutSnapshotWriting ledgerState' acc'
+          loopWithoutSnapshotWriting extLedgerState' acc'
 
 sourceBlocksWithState ::
   ( MonadIO m

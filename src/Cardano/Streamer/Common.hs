@@ -38,7 +38,7 @@ module Cardano.Streamer.Common (
 import qualified Cardano.Address as A
 import qualified Cardano.Address.Style.Shelley as A
 import Cardano.Crypto.Hash.Class (hashFromBytes, hashToTextAsHex)
-import Cardano.Ledger.BaseTypes (EpochNo (..), SlotNo (..))
+import Cardano.Ledger.BaseTypes (BlockNo (..), EpochNo (..), SlotNo (..))
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Hashes
 import Cardano.Streamer.Time
@@ -64,10 +64,14 @@ runRIO env = liftIO . flip runReaderT env
 
 deriving instance Display SlotNo
 deriving instance Display EpochNo
+deriving instance Display BlockNo
 deriving instance Aeson.ToJSONKey EpochNo
 
 instance Display DiskSnapshot where
   textDisplay = T.pack . snapshotToFileName
+
+instance Display (Hash v a) where
+  display = display . hashToTextAsHex
 
 instance Display (SafeHash a) where
   display = display . hashToTextAsHex . extractHash
