@@ -13,6 +13,7 @@
 {-# LANGUAGE TypeFamilies #-}
 
 module Cardano.Streamer.LedgerState (
+  readNewEpochState,
   encodeNewEpochState,
   applyNonByronNewEpochState,
   applyNewEpochState,
@@ -54,11 +55,13 @@ import qualified Cardano.Chain.Update.Validation.Interface as Byron (State (curr
 import Cardano.Crypto.Hash (hashFromBytes)
 import qualified Cardano.Crypto.Hashing as Byron (hashToBytes)
 import Cardano.Ledger.BaseTypes (BlockNo (..))
-import Cardano.Ledger.Binary.Plain as Plain (Encoding, serialize, toCBOR)
+import Cardano.Ledger.Binary
+import qualified Cardano.Ledger.Binary.Plain as Plain
 import Cardano.Ledger.CertState
 import Cardano.Ledger.Coin
 import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
+import Cardano.Ledger.Shelley.Governance
 import Cardano.Ledger.Shelley.LedgerState hiding (LedgerState)
 import Cardano.Ledger.UMap as UM
 import Cardano.Ledger.Val
@@ -92,11 +95,19 @@ import Ouroboros.Consensus.Shelley.Ledger.Ledger
 import Ouroboros.Consensus.TypeFamilyWrappers (WrapTipInfo (..))
 import qualified RIO.Map as Map
 
-encodeNewEpochState :: ExtLedgerState (CardanoBlock c) -> Encoding
+encodeNewEpochState :: ExtLedgerState (CardanoBlock c) -> Plain.Encoding
 encodeNewEpochState = applyNewEpochState toCBOR toCBOR
 
 writeNewEpochState :: MonadIO m => FilePath -> ExtLedgerState (CardanoBlock c) -> m ()
 writeNewEpochState fp = liftIO . BSL.writeFile fp . Plain.serialize . encodeNewEpochState
+
+readNewEpochState ::
+  (EraGov era, EraTxOut era, DecCBOR (StashedAVVMAddresses era), MonadIO m) =>
+  FilePath -> m (NewEpochState era)
+readNewEpochState fp =
+  liftIO (BSL.readFile fp) <&> Plain.decodeFull >>= \case
+    Left exc -> throwIO exc
+    Right res -> pure res
 
 pattern TickedLedgerStateByron ::
   TransitionInfo ->
