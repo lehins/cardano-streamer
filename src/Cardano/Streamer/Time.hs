@@ -128,7 +128,7 @@ defaultShowTime mDepth isConcise t@(Time i mSub) =
       printf ("%0" ++ show (maxIntervalDigits t) ++ "d") i
         <> if isConcise
           then timeNameShort t
-          else " " <> timeName t <> if i `mod` 10 == 1 then "" else "s"
+          else " " <> timeName t <> if i == 1 then "" else "s"
     sep = if isConcise then " " else ", "
 
 defaultAddTime :: (BoundedInterval t, Interval (SubTime t)) => Time t -> Integer -> Time t
