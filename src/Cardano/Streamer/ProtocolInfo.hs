@@ -159,6 +159,8 @@ writeExtLedgerState diskSnapshot extLedgerState = do
       "DiskSnapshot at path already exists: "
         <> display (T.pack snapshotFilePath)
         <> ". Removed, so it can be overwritten!"
+  logInfo $
+    "Starting to write DiskSnapshot to: " <> display (T.pack snapshotFilePath)
   measure <-
     measureAction_ $
       liftIO $

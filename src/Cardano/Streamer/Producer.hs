@@ -15,7 +15,6 @@ import Cardano.Ledger.Binary.Plain (decodeFullDecoder)
 import Cardano.Ledger.Coin
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Hashes
-import Cardano.Slotting.Slot (WithOrigin (..))
 import Cardano.Streamer.Benchmark
 import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
@@ -34,7 +33,7 @@ import Ouroboros.Consensus.Block
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Config (configCodec)
 import Ouroboros.Consensus.HeaderValidation (
-  AnnTip (annTipSlotNo),
+  AnnTip,
   HasAnnTip (..),
   annTipPoint,
   headerStateTip,
@@ -116,47 +115,39 @@ sourceBlocksWithAccState ::
   ) ->
   ConduitT a d m (ExtLedgerState (CardanoBlock StandardCrypto), e)
 sourceBlocksWithAccState blockComponent initState acc0 action = do
+  -- Remove any slot numbers that are in the past and sort
   let prepareDiskSnapshots ds =
         sortOn dsNumber $
-          case annTipSlotNo <$> headerStateTip (headerState initState) of
-            Origin -> ds
-            At (SlotNo curSlotNo) -> List.filter ((> curSlotNo) . dsNumber) ds
+          case tipSlotNo <$> tipFromExtLedgerState initState of
+            Nothing -> ds
+            Just (SlotNo initSlotNo) -> List.filter ((>= initSlotNo) . dsNumber) ds
   diskSnapshotsToWrite <- prepareDiskSnapshots . dsAppWriteDiskSnapshots <$> ask
   sourceBlocks blockComponent withOriginAnnTip
     .| loopWithSnapshotWriting initState (acc0, diskSnapshotsToWrite)
   where
     withOriginAnnTip = headerStateTip (headerState initState)
-    writeSnapshots ledgerState curSlotNo = fix $ \go -> \case
+    writeSnapshots extLedgerState = fix $ \go -> \case
       [] -> pure []
-      dss@(s : ss)
-        | dsNumber s <= curSlotNo -> writeExtLedgerState s ledgerState >> go ss
+      dss@(diskSnapshot : ss)
+        | Just tip <- tipFromExtLedgerState extLedgerState
+        , -- we use `<=` in order to map slot numbers that don't have blocks into ones that do.
+          dsNumber diskSnapshot <= unSlotNo (tipSlotNo tip) ->
+            writeExtLedgerState diskSnapshot extLedgerState >> go ss
         | otherwise -> pure dss
+    awaitForBlockContinue extLedgerState acc cont = do
+      await >>= \case
+        Nothing -> pure (extLedgerState, acc)
+        Just bwi -> do
+          (extLedgerState', acc', c) <- lift $ action extLedgerState acc bwi
+          yield c
+          cont extLedgerState' acc'
     loopWithSnapshotWriting !extLedgerState (!acc, !dss) =
-      await >>= \case
-        Nothing -> pure (extLedgerState, acc)
-        Just bwi -> do
-          (extLedgerState', acc', c) <- lift $ action extLedgerState acc bwi
-          yield c
-          let SlotNo curSlotNo = biSlotNo bwi
-          case tipFromExtLedgerState extLedgerState' of
-            Just t ->
-              logDebug $ "CurSlotNo: " <> display curSlotNo <> " " <> display t
-            Nothing -> error $ "WTF: " <> show curSlotNo
-          writeSnapshots extLedgerState' curSlotNo dss >>= \case
-            [] -> loopWithoutSnapshotWriting extLedgerState' acc'
-            ss -> loopWithSnapshotWriting extLedgerState' (acc', ss)
+      writeSnapshots extLedgerState dss >>= \case
+        [] -> loopWithoutSnapshotWriting extLedgerState acc
+        ss -> awaitForBlockContinue extLedgerState acc $ \extLedgerState' acc' ->
+          loopWithSnapshotWriting extLedgerState' (acc', ss)
     loopWithoutSnapshotWriting !extLedgerState !acc =
-      await >>= \case
-        Nothing -> pure (extLedgerState, acc)
-        Just bwi -> do
-          (extLedgerState', acc', c) <- lift $ action extLedgerState acc bwi
-          let SlotNo curSlotNo = biSlotNo bwi
-          case tipFromExtLedgerState extLedgerState' of
-            Just t ->
-              logDebug $ "CurSlotNo: " <> display curSlotNo <> " " <> display t
-            Nothing -> error $ "WTF: " <> show curSlotNo
-          yield c
-          loopWithoutSnapshotWriting extLedgerState' acc'
+      awaitForBlockContinue extLedgerState acc loopWithoutSnapshotWriting
 
 sourceBlocksWithState ::
   ( MonadIO m

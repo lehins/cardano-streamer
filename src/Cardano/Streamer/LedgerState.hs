@@ -32,6 +32,8 @@ module Cardano.Streamer.LedgerState (
   toEpochStats,
   Tip (..),
   tipFromExtLedgerState,
+  tipFromHeaderState,
+  tipFromLedgerState,
   pattern TickedLedgerStateAllegra,
   pattern TickedLedgerStateAlonzo,
   pattern TickedLedgerStateBabbage,
@@ -202,28 +204,40 @@ instance Display Tip where
 
 tipFromExtLedgerState ::
   ExtLedgerState (CardanoBlock StandardCrypto) -> Maybe Tip
-tipFromExtLedgerState extLedgerState =
-  if mAnnTip == mTip
-    then mTip
-    else
-      error $ "AnnTip /= StateTip: " ++ show mAnnTip ++ " /= " ++ show mTip
+tipFromExtLedgerState = tipFromHeaderState . headerState
+
+tipFromHeaderState ::
+  HeaderState (CardanoBlock StandardCrypto) -> Maybe Tip
+tipFromHeaderState hs = do
+  AnnTip{..} <- withOriginToMaybe $ headerStateTip hs
+  pure $
+    Tip
+      { tipSlotNo = annTipSlotNo
+      , tipPrevBlockNo = annTipBlockNo
+      , tipPrevBlockHeaderHash =
+          case fromTip $ getOneEraTipInfo annTipInfo of
+            TS _ (TS _ (TS _ (TS _ (TS _ (TS _ (TZ (WrapTipInfo headerHash))))))) -> unShelleyHash headerHash
+            TS _ (TS _ (TS _ (TS _ (TS _ (TZ (WrapTipInfo headerHash)))))) -> unShelleyHash headerHash
+            TS _ (TS _ (TS _ (TS _ (TZ (WrapTipInfo headerHash))))) -> unShelleyHash headerHash
+            TS _ (TS _ (TS _ (TZ (WrapTipInfo headerHash)))) -> unShelleyHash headerHash
+            TS _ (TS _ (TZ (WrapTipInfo headerHash))) -> unShelleyHash headerHash
+            TS _ (TZ (WrapTipInfo headerHash)) -> unShelleyHash headerHash
+            TZ (WrapTipInfo (TipInfoIsEBB (ByronHash headerHash) _)) ->
+              fromJust . hashFromBytes $ Byron.hashToBytes headerHash
+      }
+
+tipFromLedgerState ::
+  LedgerState (CardanoBlock StandardCrypto) -> Maybe Tip
+tipFromLedgerState ledgerState =
+  case ledgerState of
+    LedgerStateByron ls -> toByronTip ls
+    LedgerStateShelley ls -> toShelleyTip ls
+    LedgerStateAllegra ls -> toShelleyTip ls
+    LedgerStateMary ls -> toShelleyTip ls
+    LedgerStateAlonzo ls -> toShelleyTip ls
+    LedgerStateBabbage ls -> toShelleyTip ls
+    LedgerStateConway ls -> toShelleyTip ls
   where
-    mAnnTip = do
-      AnnTip{..} <- withOriginToMaybe $ headerStateTip (headerState extLedgerState)
-      pure $
-        Tip
-          { tipSlotNo = annTipSlotNo
-          , tipPrevBlockNo = annTipBlockNo
-          , tipPrevBlockHeaderHash =
-              case fromTip $ getOneEraTipInfo annTipInfo of
-                TS _ (TS _ (TS _ (TS _ (TS _ (TS _ (TZ (WrapTipInfo headerHash))))))) -> unShelleyHash headerHash
-                TS _ (TS _ (TS _ (TS _ (TS _ (TZ (WrapTipInfo headerHash)))))) -> unShelleyHash headerHash
-                TS _ (TS _ (TS _ (TS _ (TZ (WrapTipInfo headerHash))))) -> unShelleyHash headerHash
-                TS _ (TS _ (TS _ (TZ (WrapTipInfo headerHash)))) -> unShelleyHash headerHash
-                TS _ (TS _ (TZ (WrapTipInfo headerHash))) -> unShelleyHash headerHash
-                TS _ (TZ (WrapTipInfo headerHash)) -> unShelleyHash headerHash
-                TZ (WrapTipInfo (TipInfoIsEBB (ByronHash headerHash) _)) -> fromByronHash headerHash
-          }
     fromByronHash = fromJust . hashFromBytes . Byron.hashToBytes
     toByronTip ls = do
       blockNo <- withOriginToMaybe $ byronLedgerTipBlockNo ls
@@ -245,15 +259,6 @@ tipFromExtLedgerState extLedgerState =
           , tipPrevBlockNo = shelleyTipBlockNo
           , tipPrevBlockHeaderHash = unShelleyHash shelleyTipHash
           }
-    mTip =
-      case ledgerState extLedgerState of
-        LedgerStateByron ls -> toByronTip ls
-        LedgerStateShelley ls -> toShelleyTip ls
-        LedgerStateAllegra ls -> toShelleyTip ls
-        LedgerStateMary ls -> toShelleyTip ls
-        LedgerStateAlonzo ls -> toShelleyTip ls
-        LedgerStateBabbage ls -> toShelleyTip ls
-        LedgerStateConway ls -> toShelleyTip ls
 
 applyNewEpochState ::
   (ChainValidationState -> a) ->
