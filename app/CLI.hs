@@ -3,7 +3,6 @@
 module CLI where
 
 import Cardano.Crypto.Hash (hashFromTextAsHex)
-import Cardano.Ledger.Hashes
 import Cardano.Slotting.Slot
 import Cardano.Streamer.Common
 import qualified Data.List.NonEmpty as NE
@@ -31,7 +30,7 @@ readBlockHashOrSlotNo :: ReadM BlockHashOrSlotNo
 readBlockHashOrSlotNo =
   BlockHashOrSlotNo
     <$> asum
-      [ Right . unsafeMakeSafeHash <$> readWithMaybe hashFromTextAsHex
+      [ Right <$> readWithMaybe hashFromTextAsHex
       , Left . SlotNo <$> auto
       ]
 
@@ -84,13 +83,16 @@ optsParser =
     <*> ( ( Just
               <$> option
                 auto
-                ( long "read-snapshot"
+                ( long "start-slot"
                     <> short 'r'
                     <> help
                       ( mconcat
-                          [ "Read a Snapshot with this slot number. "
+                          [ "Start streaming the chain from this slot number. "
+                          , "In case when snapshot is needed for replay it will "
+                          , "be read from the database at that slot number. "
                           , "Also see a relevant --snapshot-suffix flag. "
-                          , "Results in failure if a snapshot does not exist."
+                          , "When snapshot is needed it will result in a failure "
+                          , "if a snapshot for that slot number and supplied suffix does not exist."
                           ]
                       )
                 )

@@ -26,7 +26,7 @@ import qualified Cardano.Ledger.Conway.Rules as Conway
 import Cardano.Ledger.Credential
 import Cardano.Ledger.MemoBytes
 import Cardano.Ledger.Plutus.Language
-import Cardano.Ledger.Shelley.LedgerState (EraCertState, NewEpochState)
+import Cardano.Ledger.Shelley.LedgerState (NewEpochState)
 import Cardano.Ledger.Shelley.Rewards (aggregateRewards)
 import qualified Cardano.Ledger.Shelley.Rules as Shelley
 import Cardano.Ledger.Shelley.Scripts
@@ -89,7 +89,7 @@ appScriptSize :: AppScript -> Int
 appScriptSize = SBS.length . appScriptBytes
 
 class
-  ( EraSegWits era
+  ( EraBlockBody era
   , EraGov era
   , EraUTxO era
   , EraStake era
@@ -158,6 +158,17 @@ instance EraApp ConwayEra where
     | otherwise = collOuts (tx ^. bodyTxL)
   getRewardsFromEvents _ (Shelley.TickNewEpochEvent (Conway.TotalRewardEvent _ rs)) =
     aggregateRewards (ProtVer (eraProtVerLow @ConwayEra) 0) rs
+  getRewardsFromEvents _ _ = Map.empty
+
+instance EraApp DijkstraEra where
+  appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
+  appOutScriptsTxBody = babbageScriptOutsTxBody
+  appRefScriptsTxBody = getAllReferenceScripts
+  utxoTx tx
+    | tx ^. isValidTxL == IsValid True = txouts (tx ^. bodyTxL)
+    | otherwise = collOuts (tx ^. bodyTxL)
+  getRewardsFromEvents _ (Shelley.TickNewEpochEvent (Conway.TotalRewardEvent _ rs)) =
+    aggregateRewards (ProtVer (eraProtVerLow @DijkstraEra) 0) rs
   getRewardsFromEvents _ _ = Map.empty
 
 appTimelockScript ::

@@ -10,65 +10,13 @@
 
 module Cardano.Streamer.Benchmark where
 
+import Ouroboros.Consensus.Ledger.Basics (ComputeLedgerEvents(..), LedgerResult(..))
 import Cardano.Streamer.Common
-import Cardano.Streamer.LedgerState (extLedgerStateEpochNo, tickedExtLedgerStateEpochNo)
-import Cardano.Streamer.Time
+import Cardano.Streamer.Inspection
+import Cardano.Streamer.Measure
 import Conduit
-import Criterion.Measurement (getCPUTime, getCycles, getTime, initializeTime)
 import Data.Aeson
-import Data.Fixed
 import Ouroboros.Consensus.Block
-import Ouroboros.Consensus.Cardano.Block
-import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState)
-import Ouroboros.Consensus.Ticked (Ticked)
-import qualified RIO.Text as T
-import RIO.Time (NominalDiffTime, secondsToNominalDiffTime)
-import Text.Printf
-
-data Measure = Measure
-  { measureTime :: !Double
-  , measureCPUTime :: !Double
-  , measureCycles :: !Word64
-  }
-  deriving (Eq, Show, Generic)
-
-instance ToJSON Measure where
-  toJSON = genericToJSON (defaultOptions{fieldLabelModifier = drop 2})
-
-instance Display Measure where
-  display = displayMeasure Nothing
-
-maxDepthMeasure :: Measure -> Int
-maxDepthMeasure Measure{..} =
-  max
-    (maxTimeDepth $ diffTimeToMicro $ doubleToDiffTime measureTime)
-    (maxTimeDepth $ diffTimeToMicro $ doubleToDiffTime measureCPUTime)
-
-divMeasure :: Measure -> Word64 -> Measure
-divMeasure m d
-  | d == 0 = m
-  | otherwise =
-      Measure
-        { measureTime = measureTime m / fromIntegral d
-        , measureCPUTime = measureCPUTime m / fromIntegral d
-        , measureCycles = measureCycles m `div` d
-        }
-
-instance Semigroup Measure where
-  (<>) m1 m2 =
-    Measure
-      { measureTime = measureTime m1 + measureTime m2
-      , measureCPUTime = measureCPUTime m1 + measureCPUTime m2
-      , measureCycles = measureCycles m1 + measureCycles m2
-      }
-
-instance Monoid Measure where
-  mempty =
-    Measure
-      { measureTime = 0
-      , measureCPUTime = 0
-      , measureCycles = 0
-      }
 
 data BlockStat = BlockStat
   { blockNumTxs :: !Int
@@ -88,108 +36,26 @@ data Stat = Stat
   , blockStat :: {-# UNPACK #-} !BlockStat
   }
 
-measureAction :: MonadIO m => m a -> m (a, Measure)
-measureAction action = do
-  startTime <- liftIO getTime
-  startCPUTime <- liftIO getCPUTime
-  startCycles <- liftIO getCycles
-  !res <- action
-  endTime <- liftIO getTime
-  endCPUTime <- liftIO getCPUTime
-  endCycles <- liftIO getCycles
-  let !mes =
-        Measure
-          { measureTime = endTime - startTime
-          , measureCPUTime = endCPUTime - startCPUTime
-          , measureCycles = endCycles - startCycles
-          }
-  pure (res, mes)
-
-measureAction_ :: MonadIO m => m a -> m Measure
-measureAction_ action = snd <$> measureAction action
-
-withBenchmarking ::
-  forall c m mc a b.
-  (MonadIO mc, MonadIO m) =>
-  ( (m (CardanoBlock c) -> m (CardanoBlock c, Measure)) ->
-    ( ExtLedgerState (CardanoBlock c) ->
-      Ticked (ExtLedgerState (CardanoBlock c)) ->
-      SlotNo ->
-      m TickStat
-    ) ->
-    (m a -> (Measure, TickStat) -> m (a, Stat)) ->
-    mc b
-  ) ->
-  mc b
-withBenchmarking f = do
-  let
-    benchDecode decodeBlock = measureAction decodeBlock
-    benchRunTick ::
-      ExtLedgerState (CardanoBlock c) ->
-      Ticked (ExtLedgerState (CardanoBlock c)) ->
-      SlotNo ->
-      m TickStat
-    benchRunTick prevLedgerState tickedLedgerState slotNo = do
-      measure <- measureAction_ (pure tickedLedgerState)
-      let prevEpochNo = extLedgerStateEpochNo prevLedgerState
-          (_ti, newEpochNo) = tickedExtLedgerStateEpochNo tickedLedgerState
-      pure $!
-        if prevEpochNo /= newEpochNo
-          then TickStat slotNo (Just newEpochNo) measure
-          else TickStat slotNo Nothing measure
-    benchRunBlock getExtLedgerState (decodeMeasure, tickStat) = do
-      (extLedgerState, applyMeasure) <- measureAction getExtLedgerState
-      let !blockStat = BlockStat 0 0 applyMeasure decodeMeasure
-          !stat = Stat tickStat blockStat
-      pure (extLedgerState, stat)
-  liftIO initializeTime
-  f benchDecode benchRunTick benchRunBlock
-
-data MeasureSummary = MeasureSummary
-  { msMean :: !Measure
-  , -- msMedean :: !Measure -- not possible to compute in streaming fashion
-    -- TODO: implement median estimation algorithm
-    -- ,
-    msSum :: !Measure
-  , msCount :: !Word64
-  }
-  deriving (Generic)
-
-instance ToJSON MeasureSummary where
-  toJSON = genericToJSON (defaultOptions{fieldLabelModifier = drop 2})
-
-instance Display MeasureSummary where
-  display ms = displayMeasureSummary (maxDepthMeasureSummary ms) 0 ms
-
-maxDepthMeasureSummary :: MeasureSummary -> Int
-maxDepthMeasureSummary MeasureSummary{..} =
-  max (maxDepthMeasure msMean) (maxDepthMeasure msSum)
-
-displayMeasureSummary :: Int -> Int -> MeasureSummary -> Utf8Builder
-displayMeasureSummary depth n MeasureSummary{..} =
-  mconcat
-    [ prefix <> "Mean:  " <> displayMeasure (Just depth) msMean
-    , prefix <> "Sum:   " <> displayMeasure (Just depth) msSum
-    , prefix <> "Count: " <> display msCount
-    ]
-  where
-    prefix = "\n" <> display (T.replicate n " ")
-
-displayMeasure :: Maybe Int -> Measure -> Utf8Builder
-displayMeasure mDepth Measure{..} =
-  mconcat
-    [ "Time:["
-    , displayDoubleMeasure measureTime
-    , "] CPUTime:["
-    , displayDoubleMeasure measureCPUTime
-    , "] Cycles:["
-    , display . T.pack $ showMeasureCycles measureCycles
-    , "]"
-    ]
-  where
-    showMeasureCycles = if isJust mDepth then printf "%20d" else show
-    displayDoubleMeasure =
-      display . T.pack . showTime mDepth True . diffTimeToMicro . doubleToDiffTime
+benchmarkInspection :: SlotInspection b Measure () Measure Measure () Stat
+benchmarkInspection =
+  SlotInspection
+    { siDecodeBlock = \_ -> measureAction
+    , siLedgerDbLookup = const unitPrefix
+    , siTick = \_ action -> measureAction (lrResult <$> action OmitLedgerEvents)
+    , siApplyBlock = \_ action -> measureAction (action OmitLedgerEvents)
+    , siLedgerDbPush = \_ -> id
+    , siFinal =
+        \swb decodeMeasure _ tickMeasure applyBlockMeasure _ ->
+          let
+            !slotNo = swbSlotNo swb
+            !tickStat =
+              if isFirstSlotOfNewEpoch swb
+                then TickStat slotNo (Just (swbEpochNo swb)) tickMeasure
+                else TickStat slotNo Nothing tickMeasure
+            !blockStat = BlockStat 0 0 applyBlockMeasure decodeMeasure
+           in
+            pure $! Stat tickStat blockStat
+    }
 
 data StatsReport = StatsReport
   { srTick :: !MeasureSummary
@@ -261,8 +127,3 @@ calcStatsReport = do
         , msSum = mSum
         , msCount = mCount
         }
-
-doubleToDiffTime :: Double -> NominalDiffTime
-doubleToDiffTime d = secondsToNominalDiffTime f
-  where
-    f = MkFixed $ round (d * fromIntegral (resolution f))

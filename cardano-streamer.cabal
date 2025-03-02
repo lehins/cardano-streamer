@@ -18,14 +18,19 @@ tested-with:         GHC == 9.2.7
 library
   hs-source-dirs:      src
   exposed-modules:     Cardano.Streamer.Common
+                     -- , Cardano.Streamer.Consumer
                      , Cardano.Streamer.Benchmark
                      , Cardano.Streamer.BlockInfo
+                     , Cardano.Streamer.Inspection
                      , Cardano.Streamer.Ledger
                      , Cardano.Streamer.LedgerState
+                     , Cardano.Streamer.Measure
                      , Cardano.Streamer.Producer
                      , Cardano.Streamer.ProtocolInfo
                      , Cardano.Streamer.Rewards
                      , Cardano.Streamer.RTS
+                     , Cardano.Streamer.Run
+                     , Cardano.Streamer.Storage
                      , Cardano.Streamer.Time
 
                     -- TODO: finish and reinstate when `io-classes-1.0` is in use.
@@ -41,17 +46,19 @@ library
                      , async
                      , bytestring
                      , base16-bytestring
-                     , cardano-api >= 8.46
+                     , cardano-api ^>= 10.20
                      , cardano-addresses
                      , cardano-binary
                      , cardano-crypto-class
                      , cardano-crypto-wrapper
+                     , cardano-data
                      , cardano-ledger-api
                      , cardano-ledger-alonzo >= 1.8
                      , cardano-ledger-allegra
                      , cardano-ledger-babbage
+                     , cardano-ledger-binary
                      , cardano-ledger-byron
-                     , cardano-ledger-core >= 1.12
+                     , cardano-ledger-core ^>= 1.18
                      , cardano-ledger-shelley
                      , cardano-ledger-conway >= 1.18.1
                      , cardano-protocol-tpraos
@@ -63,13 +70,14 @@ library
                      , criterion-measurement
                      , FailT
                      , strict-sop-core
-                     , ouroboros-consensus >= 0.22.0.0
+                     , ouroboros-consensus >= 0.28.0.0
                      , ouroboros-consensus-protocol
                      , ouroboros-consensus-cardano
                      , ouroboros-consensus-diffusion
                      , ouroboros-network-api
                      , io-classes
                      , nothunks
+                     , profunctors
                      , resource-registry
                      , rio
                      , serialise
@@ -81,9 +89,6 @@ library
                      , vector
                      , sop-core
                      , sop-extras
-
-                     , cardano-ledger-binary
-                     , cardano-ledger-babbage
 
   default-language:    Haskell2010
   ghc-options:         -Wall

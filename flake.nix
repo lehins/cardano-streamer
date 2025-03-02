@@ -37,7 +37,7 @@
         inherit (nixpkgs) lib;
 
         # see flake `variants` below for alternative compilers
-        defaultCompiler = "ghc966";
+        defaultCompiler = "ghc967";
         # We use cabalProject' to ensure we don't build the plan for
         # all systems.
         cabalProject = nixpkgs.haskell-nix.cabalProject' ({config, ...}: {
@@ -63,10 +63,10 @@
               # tools that work only with default compiler
               fourmolu = "0.17.0.0"; # 0.18.x requires ghc-9.8
               hlint = "3.8"; # 3.10 requires ghc-9.8
-              haskell-language-server = "2.9.0.1";
+              haskell-language-server = "2.10.0.0";
             };
           # and from nixpkgs or other inputs
-          shell.nativeBuildInputs = with nixpkgs; [ gh jq yq-go ];
+          shell.nativeBuildInputs = with nixpkgs; [ gh jq yq-go lmdb ];
           # disable Hoogle until someone request it
           shell.withHoogle = false;
           # Skip cross compilers for the shell

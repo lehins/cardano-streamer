@@ -17,6 +17,8 @@ module Cardano.Streamer.BlockInfo where
 import qualified Cardano.Chain.Block as B
 import qualified Cardano.Chain.UTxO as B
 import qualified Cardano.Chain.Update as B
+import Cardano.Crypto.Hash.Class (hashFromBytes, hashFromBytesShort)
+import qualified Cardano.Crypto.Hashing as Byron (hashToBytes)
 import Cardano.Ledger.Address
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary
@@ -40,8 +42,10 @@ import Data.List (intersperse)
 import qualified Data.Map.Strict as Map
 import qualified Data.Text.Encoding as T
 import qualified Data.Vector as V
+import Ouroboros.Consensus.Block (HeaderHash)
 import Ouroboros.Consensus.Byron.Ledger.Block
 import Ouroboros.Consensus.Cardano.Block
+import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (getOneEraHash)
 import Ouroboros.Consensus.Protocol.Praos (Praos)
 import Ouroboros.Consensus.Protocol.Praos.Header hiding (Header)
 import Ouroboros.Consensus.Protocol.TPraos (TPraos)
@@ -56,18 +60,37 @@ import Ouroboros.Consensus.Shelley.Protocol.TPraos ()
 data BlockWithInfo b = BlockWithInfo
   { biSlotNo :: !SlotNo
   , biBlockSize :: !SizeInBytes
-  , biBlockHeaderSize :: !Word16
   , biBlocksProcessed :: !Word64
+  , biBlockHeaderSize :: !Word16
+  , biBlockHeaderHash :: !(Hash HASH EraIndependentBlockHeader)
   , biBlockComponent :: !b
   }
+
+class BlockHeaderHash blk where
+  toHeaderHash :: proxy blk -> HeaderHash blk -> Hash HASH EraIndependentBlockHeader
+
+instance BlockHeaderHash ByronBlock where
+  toHeaderHash _ (ByronHash hash) =
+    case hashFromBytes (Byron.hashToBytes hash) of
+      Nothing -> error "Impossible: Byron Header Hash is also Blake2b_256"
+      Just h -> h
+
+instance BlockHeaderHash (ShelleyBlock proto era) where
+  toHeaderHash _ = unShelleyHash
+
+instance BlockHeaderHash (CardanoBlock block) where
+  toHeaderHash _ hash =
+    case hashFromBytesShort (getOneEraHash hash) of
+      Nothing -> error "Impossible: Header Hash for all eras isBlake2b_256"
+      Just h -> h
 
 instance Functor BlockWithInfo where
   fmap f bwi = bwi{biBlockComponent = f (biBlockComponent bwi)}
 
 data TxSummary = TxSummary
-  { tpSize :: !Int32
-  , tpInsCount :: !Int16
-  , tpOutsCount :: !Int16
+  { tpSize :: !Word32
+  , tpInsCount :: !Word16
+  , tpOutsCount :: !Word16
   }
 
 data BlockSummary = BlockSummary
@@ -92,27 +115,17 @@ fromByronProtocolVersion pv =
     , pvMinor = fromIntegral $ B.pvMinor pv
     }
 
-data RawBlock = RawBlock
-  { rawBlockBytes :: !ByteString
-  , rawBlockHash :: SafeHash EraIndependentBlockBody
-  }
+blockCardanoEra :: CardanoBlock c -> CardanoEra
+blockCardanoEra =
+  withProtocolBlock (\_ -> Byron) (\era _ -> era) (\era _ -> era)
 
-instance SafeToHash RawBlock where
-  originalBytes = rawBlockBytes
-
-instance HashAnnotated RawBlock EraIndependentBlockBody
-
-getCardanoEra :: CardanoBlock c -> CardanoEra
-getCardanoEra =
-  applyBlock (\_ -> Byron) (\era _ -> era) (\era _ -> era)
-
-applyBlock ::
+withProtocolBlock ::
   (ByronBlock -> a) ->
   (forall era. EraApp era => CardanoEra -> ShelleyBlock (TPraos c) era -> a) ->
   (forall era. EraApp era => CardanoEra -> ShelleyBlock (Praos c) era -> a) ->
   CardanoBlock c ->
   a
-applyBlock applyBronBlock applyTPraosBlock applyPraosBlock = \case
+withProtocolBlock applyBronBlock applyTPraosBlock applyPraosBlock = \case
   BlockByron byronBlock -> applyBronBlock byronBlock
   BlockShelley shelleyBlock -> applyTPraosBlock Shelley shelleyBlock
   BlockAllegra allegraBlock -> applyTPraosBlock Allegra allegraBlock
@@ -120,30 +133,11 @@ applyBlock applyBronBlock applyTPraosBlock applyPraosBlock = \case
   BlockAlonzo alonzoBlock -> applyTPraosBlock Alonzo alonzoBlock
   BlockBabbage babbageBlock -> applyPraosBlock Babbage babbageBlock
   BlockConway conwayBlock -> applyPraosBlock Conway conwayBlock
-
-getRawBlock :: CardanoBlock c -> RawBlock
-getRawBlock =
-  mkRawBlock . applyBlock byronBlockBytes blockBytes blockBytes
-  where
-    byronBlockBytes byronBlock =
-      case byronBlockRaw byronBlock of
-        B.ABOBBlock abBlock -> B.blockAnnotation abBlock
-        B.ABOBBoundary abBlock -> B.boundaryAnnotation abBlock
-    blockBytes _ block =
-      case shelleyBlockRaw block of
-        Block' _ _ bs -> toStrictBytes bs
-    mkRawBlock bs =
-      let rb =
-            RawBlock
-              { rawBlockBytes = bs
-              , rawBlockHash = error "Hash has not been computed yet"
-              }
-          safeHash = hashAnnotated rb
-       in rb{rawBlockHash = safeHash}
+  BlockDijkstra conwayBlock -> applyPraosBlock Dijkstra conwayBlock
 
 getBlockSummary :: Crypto c => CardanoBlock c -> BlockSummary
 getBlockSummary =
-  applyBlock getByronBlockSummary getTPraosBlockSummary getPraosBlockSummary
+  withProtocolBlock getByronBlockSummary getTPraosBlockSummary getPraosBlockSummary
   where
     getByronBlockSummary byronBlock =
       case byronBlockRaw byronBlock of
@@ -190,7 +184,8 @@ getBlockSummary =
                 }
 
 getTPraosBlockSummary ::
-  (EraSegWits era, Crypto c) =>
+  forall era c.
+  (EraBlockBody era, Crypto c) =>
   CardanoEra ->
   ShelleyBlock (TPraos c) era ->
   BlockSummary
@@ -199,7 +194,7 @@ getTPraosBlockSummary era block =
         case bheader (shelleyBlockRaw block) of
           bh@(BHeader bhBody _) -> (bhBody, originalBytesSize bh)
       (txsSeq, blockSize) = case shelleyBlockRaw block of
-        Block' _ txs bs -> (fromTxSeq txs, fromIntegral (BSL.length bs))
+        Block _ blockBody -> (blockBody ^. txSeqBlockBodyL, bBodySize (ProtVer (eraProtVerLow @era) 0) blockBody)
       blockBodySize = fromIntegral (bsize blockHeaderBody)
    in assert (blockSize == blockHeaderSize + blockBodySize) $
         BlockSummary
@@ -215,7 +210,8 @@ getTPraosBlockSummary era block =
           }
 
 getPraosBlockSummary ::
-  (EraSegWits era, Crypto c) =>
+  forall era c.
+  (EraBlockBody era, Crypto c) =>
   CardanoEra ->
   ShelleyBlock (Praos c) era ->
   BlockSummary
@@ -224,7 +220,7 @@ getPraosBlockSummary era block =
       blockHeaderBody = headerBody blockHeader
       blockHeaderSize = headerSize blockHeader
       (txsSeq, blockSize) = case shelleyBlockRaw block of
-        Block' _ txs bs -> (fromTxSeq txs, fromIntegral (BSL.length bs))
+        Block _ blockBody -> (blockBody ^. txSeqBlockBodyL, bBodySize (ProtVer (eraProtVerLow @era) 0) blockBody)
       blockBodySize = fromIntegral (hbBodySize blockHeaderBody)
    in assert (blockSize == blockHeaderSize + blockBodySize) $
         BlockSummary
@@ -246,19 +242,19 @@ getTxsSummary txsSeq =
 getTxSummary :: EraTx era => Tx era -> TxSummary
 getTxSummary tx =
   TxSummary
-    { tpSize = fromInteger (tx ^. sizeTxF)
+    { tpSize = tx ^. sizeTxF
     , tpInsCount = fromIntegral $ length $ tx ^. bodyTxL . inputsTxBodyL
     , tpOutsCount = fromIntegral $ length $ tx ^. bodyTxL . outputsTxBodyL
     }
 
-applyBlockTxs ::
+withBlockTxs ::
   forall a c.
   ([B.ATxAux ByteString] -> a) ->
   (forall era. EraApp era => [Tx era] -> a) ->
   CardanoBlock c ->
   a
-applyBlockTxs applyByronTxs applyNonByronTxs =
-  applyBlock
+withBlockTxs applyByronTxs applyNonByronTxs =
+  withProtocolBlock
     (applyByronTxs . getByronTxs)
     (\_ -> applyNonByronTxs . getShelleyOnwardsTxs)
     (\_ -> applyNonByronTxs . getShelleyOnwardsTxs)
@@ -275,18 +271,18 @@ getShelleyOnwardsTxs ::
   EraApp era =>
   ShelleyBlock (p c) era ->
   [Tx era]
-getShelleyOnwardsTxs = toList . fromTxSeq . bbody . shelleyBlockRaw
+getShelleyOnwardsTxs = toList . view txSeqBlockBodyL . bbody . shelleyBlockRaw
 
 getSlotNo :: Crypto c => CardanoBlock c -> SlotNo
 getSlotNo =
-  applyBlock
+  withProtocolBlock
     byronBlockSlotNo
     (\_ -> bheaderSlotNo . getTPraosBHeaderBody)
     (\_ -> hbSlotNo . getPraosBHeaderBody)
 
 getSlotNoWithEra :: Crypto c => CardanoBlock c -> (CardanoEra, SlotNo)
 getSlotNoWithEra =
-  applyBlock
+  withProtocolBlock
     ((,) Byron . byronBlockSlotNo)
     (\era -> (,) era . bheaderSlotNo . getTPraosBHeaderBody)
     (\era -> (,) era . hbSlotNo . getPraosBHeaderBody)
@@ -307,7 +303,7 @@ filterBlockWithdrawals ::
   CardanoBlock c ->
   Map (Credential 'Staking) Coin
 filterBlockWithdrawals creds =
-  applyBlockTxs (const mempty) $ \txs ->
+  withBlockTxs (const mempty) $ \txs ->
     Map.unionsWith (<+>) $
       map
         ( \tx ->
@@ -323,7 +319,7 @@ accScriptsStats ::
   CardanoBlock c ->
   Map AppLanguage (ScriptsStats ms)
 accScriptsStats fTx =
-  applyBlockTxs (const Map.empty) (calcStatsForAppScripts fTx)
+  withBlockTxs (const Map.empty) (calcStatsForAppScripts fTx)
 
 calcStatsForAppScripts ::
   (ToMaxScript ms, Foldable f, Foldable t) =>

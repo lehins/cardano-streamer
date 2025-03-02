@@ -12,6 +12,7 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Cardano.Streamer.Common (
+  App,
   DbStreamerApp (..),
   AppConfig (..),
   Opts (..),
@@ -22,6 +23,8 @@ module Cardano.Streamer.Common (
   throwShowExceptT,
   throwStringExceptT,
   mkTracer,
+  LedgerDb (..),
+  HasLedgerDb (..),
   ValidationMode (..),
   HasImmutableDb (..),
   HasResourceRegistry (..),
@@ -53,8 +56,9 @@ import Cardano.Ledger.BaseTypes (
   word8ToNetwork,
  )
 import Cardano.Ledger.Coin
+import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
-import Cardano.Ledger.Hashes
+import Cardano.Protocol.Crypto (StandardCrypto)
 import Cardano.Streamer.Time
 import Control.Monad.Trans.Except
 import Control.ResourceRegistry (ResourceRegistry)
@@ -65,14 +69,20 @@ import qualified Data.ByteString.Char8 as BS8 (pack)
 import Data.Csv as Csv
 import Data.Fixed
 import Data.Time.Format.ISO8601
+import Ouroboros.Consensus.Block (Point)
+import Ouroboros.Consensus.Cardano.Block (CardanoBlock)
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import qualified Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
-import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..), snapshotToFileName)
+import qualified Ouroboros.Consensus.Storage.LedgerDB as LDB
+import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..), snapshotToDirName)
 import RIO as X hiding (RIO, runRIO)
 import RIO.FilePath
 import qualified RIO.Text as T
 import RIO.Time
+
+-- There are a whole bunch of orphans in Consensus and this is the simplest way to avoid dealing with them:
+import Cardano.Api ()
 
 type RIO env = ReaderT env IO
 
@@ -96,13 +106,13 @@ instance ToField Coin where
     BS8.pack $ show (MkFixed c :: Fixed E6)
 
 instance Display DiskSnapshot where
-  textDisplay = T.pack . snapshotToFileName
+  textDisplay = T.pack . snapshotToDirName
 
 instance Display (Hash v a) where
-  display = display . hashToTextAsHex
+  textDisplay = hashToTextAsHex
 
 instance Display (SafeHash a) where
-  display = display . hashToTextAsHex . extractHash
+  textDisplay = hashToTextAsHex . extractHash
 
 class HasResourceRegistry env where
   registryL :: Lens' env (ResourceRegistry IO)
@@ -115,7 +125,8 @@ data CardanoEra
   | Alonzo
   | Babbage
   | Conway
-  deriving (Eq, Show)
+  | Dijkstra
+  deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance ToField CardanoEra where
   toField = BS8.pack . show
@@ -159,6 +170,8 @@ data ValidationMode
   | NoValidation
   deriving (Eq, Ord, Enum, Bounded, Show)
 
+type App = DbStreamerApp (CardanoBlock StandardCrypto)
+
 data DbStreamerApp blk = DbStreamerApp
   { dsAppLogFunc :: !LogFunc
   , dsAppRegistry :: !(ResourceRegistry IO)
@@ -166,17 +179,30 @@ data DbStreamerApp blk = DbStreamerApp
   , dsAppChainDir :: !FilePath
   , dsAppChainDbArgs :: !(ChainDB.ChainDbArgs Identity IO blk)
   , dsAppIDb :: !(ImmutableDB.ImmutableDB IO blk)
+  , dsAppLedgerDb :: !(LedgerDb blk)
   , dsAppOutDir :: !(Maybe FilePath)
   -- ^ Output directory where to write files
+  , dsAppStartPoint :: !(Point blk)
+  -- ^ Slot number from which to start reading the chain from.
   , dsAppStopSlotNo :: !(Maybe SlotNo)
   -- ^ Last slot number to execute
-  , dsAppWriteDiskSnapshots :: ![DiskSnapshot]
-  , dsAppWriteBlocks :: !(IORef (Set SlotNo, Set (SafeHash EraIndependentBlockBody)))
+  , dsAppWriteDiskSnapshots :: !(IORef [DiskSnapshot])
+  , dsAppWriteBlocks :: !(IORef (Set SlotNo, Set (Hash HASH EraIndependentBlockHeader)))
   , dsAppValidationMode :: !ValidationMode
   , dsAppStartTime :: !UTCTime
   , dsAppRTSStatsHandle :: !(Maybe Handle)
-  , dsAppRewardsHandles :: !(Map (Credential 'Staking) Handle)
   }
+
+data LedgerDb blk = LedgerDb
+  { lLedgerDb :: !(LDB.LedgerDB' IO blk)
+  , lTestInternals :: !(LDB.TestInternals' IO blk)
+  }
+
+class HasLedgerDb env blk | env -> blk where
+  ledgerDbL :: Lens' env (LedgerDb blk)
+
+instance HasLedgerDb (DbStreamerApp blk) blk where
+  ledgerDbL = lens dsAppLedgerDb $ \app ledgerDb -> app{dsAppLedgerDb = ledgerDb}
 
 class HasImmutableDb env blk | env -> blk where
   iDbL :: Lens' env (ImmutableDB.ImmutableDB IO blk)
@@ -198,7 +224,7 @@ data AppConfig = AppConfig
   , appConfReadDiskSnapshot :: !(Maybe DiskSnapshot)
   , appConfWriteDiskSnapshots :: ![DiskSnapshot]
   , appConfWriteBlocksSlotNoSet :: !(Set SlotNo)
-  , appConfWriteBlocksBlockHashSet :: !(Set (SafeHash EraIndependentBlockBody))
+  , appConfWriteBlocksBlockHashSet :: !(Set (Hash HASH EraIndependentBlockHeader))
   , appConfStopSlotNumber :: !(Maybe Word64)
   , appConfValidationMode :: !ValidationMode
   , appConfLogFunc :: !LogFunc
@@ -226,7 +252,7 @@ instance Display Command where
     ComputeRewards _xs -> "Compute Rewards" -- for: " <> intersperce "," (map displayShow xs)
 
 newtype BlockHashOrSlotNo = BlockHashOrSlotNo
-  {unBlockHashOrSlotNo :: Either SlotNo (SafeHash EraIndependentBlockBody)}
+  {unBlockHashOrSlotNo :: Either SlotNo (Hash HASH EraIndependentBlockHeader)}
   deriving (Eq, Show)
 
 data Opts = Opts
@@ -309,7 +335,7 @@ getElapsedTime = do
 getDiskSnapshotFilePath :: MonadReader (DbStreamerApp blk) m => DiskSnapshot -> m FilePath
 getDiskSnapshotFilePath diskSnapshot = do
   chainDir <- dsAppChainDir <$> ask
-  pure $ chainDir </> "ledger" </> snapshotToFileName diskSnapshot
+  pure $ chainDir </> "ledger" </> snapshotToDirName diskSnapshot
 
 writeReport ::
   (MonadReader (DbStreamerApp blk) m, MonadIO m, Aeson.ToJSON p, Display p) =>
