@@ -39,6 +39,7 @@ import Ouroboros.Consensus.HeaderValidation (
   headerStateTip,
  )
 import Ouroboros.Consensus.Ledger.Abstract (
+  ComputeLedgerEvents (..),
   applyBlockLedgerResult,
   reapplyBlockLedgerResult,
  )
@@ -280,7 +281,7 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
             <> display (T.pack (showTime Nothing False elapsedTime))
   app <- ask
   let ledgerCfg = ExtLedgerCfg . pInfoConfig $ dsAppProtocolInfo app
-      lrTick = applyChainTickLedgerResult ledgerCfg slotNo prevLedger
+      lrTick = applyChainTickLedgerResult OmitLedgerEvents ledgerCfg slotNo prevLedger
       lrTickResult = lrResult lrTick
       reportException (exc :: SomeException) =
         when (isSyncException exc) $ do
@@ -294,13 +295,13 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
       let applyBlockGranular =
             case dsAppValidationMode app of
               FullValidation -> do
-                case runExcept (applyBlockLedgerResult ledgerCfg block lrTickResult) of
+                case runExcept (applyBlockLedgerResult OmitLedgerEvents ledgerCfg block lrTickResult) of
                   Right lrBlock -> pure $ lrResult lrBlock
                   Left errorMessage -> do
                     logStickyStatus
                     reportValidationError errorMessage slotNo block prevLedger
               ReValidation ->
-                pure $ lrResult $ reapplyBlockLedgerResult ledgerCfg block (lrResult lrTick)
+                pure $ lrResult $ reapplyBlockLedgerResult OmitLedgerEvents ledgerCfg block (lrResult lrTick)
               _ -> error "NoValidation is not yet implemeted"
       res <- inspectBlockState lrTickResult applyBlockGranular a
       when (slotNo `Set.member` blocksToWriteSlotSet) $ do
