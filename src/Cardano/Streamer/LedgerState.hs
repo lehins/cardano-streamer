@@ -225,6 +225,37 @@ encodeNewEpochState = applyNewEpochState toCBOR toCBOR
 
 writeNewEpochState :: MonadIO m => FilePath -> ExtLedgerState (CardanoBlock c) -> m ()
 writeNewEpochState fp = liftIO . BSL.writeFile fp . Plain.serialize . encodeNewEpochState
+-- writeNewEpochState fp ls = liftIO $ do
+--   let encNes = applyNewEpochState undefined $ \nes ->
+--         let enc = toPlainEncoding (natVersion @9) . encCBOR
+--             roundtripEncode um =
+--               let
+--                 e = enc um
+--                 bsl = Plain.serialize e
+--                in
+--                 case decodeFullDecoder (natVersion @9) "UMap" decNoShareCBOR bsl :: Either DecoderError UMap of
+--                   Left err -> Left $ show err
+--                   Right um' -> if um /= um' then Left "Does not roundtrip" else Right e
+--             go UMap{..} =
+--               let sz = Map.size umPtrs
+--                   (es1, es2) = Map.splitAt (sz `div` 2) umElems
+--                   (ps1, ps2) = Map.splitAt (sz `div` 2) umPtrs
+--                   (um1, um2) = (UMap es1 ps1, UMap es2 ps2)
+--                in if sz <= 1
+--                     then case roundtripEncode um2 of
+--                       Left err -> error (show err) `seq` enc um2
+--                       Right _ -> error "Didn't find"
+--                     else case roundtripEncode um1 of
+--                       Left err -> go um1
+--                       Right _ -> go um2
+--          in go $
+--               nes
+--                 ^. nesEpochStateL
+--                 . esLStateL
+--                 . lsCertStateL
+--                 . certDStateL
+--                 . dsUnifiedL
+--   BSL.writeFile fp . Plain.serialize . encNes $ ls
 
 readNewEpochState ::
   ( EraGov era
