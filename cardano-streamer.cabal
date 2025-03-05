@@ -45,10 +45,12 @@ library
                      , cardano-binary
                      , cardano-crypto-class
                      , cardano-crypto-wrapper
+                     , cardano-data
                      , cardano-ledger-api
                      , cardano-ledger-alonzo >= 1.8
                      , cardano-ledger-allegra
                      , cardano-ledger-babbage
+                     , cardano-ledger-binary
                      , cardano-ledger-byron
                      , cardano-ledger-core >= 1.12
                      , cardano-ledger-shelley
@@ -77,9 +79,6 @@ library
                      , vector
                      , sop-core
                      , sop-extras
-
-                     , cardano-ledger-binary
-                     , cardano-ledger-babbage
 
   default-language:    Haskell2010
   ghc-options:         -Wall

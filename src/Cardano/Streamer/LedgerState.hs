@@ -9,6 +9,7 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 
@@ -17,6 +18,7 @@ module Cardano.Streamer.LedgerState (
   encodeNewEpochState,
   applyNonByronNewEpochState,
   applyNewEpochState,
+  modifyLedgerState,
   applyTickedNewEpochStateWithBlock,
   applyTickedNewEpochStateWithTxs,
   tickedExtLedgerStateEpochNo,
@@ -61,8 +63,8 @@ import Cardano.Ledger.CertState
 import Cardano.Ledger.Coin
 import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
-import Cardano.Ledger.State
 import Cardano.Ledger.Shelley.LedgerState hiding (LedgerState)
+import Cardano.Ledger.State
 import Cardano.Ledger.UMap as UM
 import Cardano.Ledger.Val
 import Cardano.Slotting.Slot
@@ -80,6 +82,7 @@ import Ouroboros.Consensus.Byron.Ledger.Block
 import Ouroboros.Consensus.Byron.Ledger.Ledger
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (OneEraTipInfo (..))
+import Ouroboros.Consensus.HardFork.Combinator.Basics (LedgerState (HardForkLedgerState))
 import Ouroboros.Consensus.HardFork.Combinator.Ledger
 import Ouroboros.Consensus.HardFork.Combinator.State.Types as State
 import Ouroboros.Consensus.HeaderValidation (
@@ -95,6 +98,128 @@ import Ouroboros.Consensus.Shelley.Ledger.Ledger
 import Ouroboros.Consensus.TypeFamilyWrappers (WrapTipInfo (..))
 import qualified RIO.Map as Map
 
+-- TODO: expose in consensus from Ouroboros.Consensus.Cardano.Block
+pattern TeleByron ::
+  f ByronBlock ->
+  Telescope g f (CardanoEras c)
+pattern TeleByron x =
+  TZ x
+
+pattern TeleShelley ::
+  g ByronBlock ->
+  f (ShelleyBlock (TPraos c) ShelleyEra) ->
+  Telescope g f (CardanoEras c)
+pattern TeleShelley byron x =
+  TS byron (TZ x)
+
+pattern TeleAllegra ::
+  g ByronBlock ->
+  g (ShelleyBlock (TPraos c) ShelleyEra) ->
+  f (ShelleyBlock (TPraos c) AllegraEra) ->
+  Telescope g f (CardanoEras c)
+pattern TeleAllegra byron shelley x =
+  TS byron (TS shelley (TZ x))
+
+pattern TeleMary ::
+  g ByronBlock ->
+  g (ShelleyBlock (TPraos c) ShelleyEra) ->
+  g (ShelleyBlock (TPraos c) AllegraEra) ->
+  f (ShelleyBlock (TPraos c) MaryEra) ->
+  Telescope g f (CardanoEras c)
+pattern TeleMary byron shelley allegra x =
+  TS byron (TS shelley (TS allegra (TZ x)))
+
+pattern TeleAlonzo ::
+  g ByronBlock ->
+  g (ShelleyBlock (TPraos c) ShelleyEra) ->
+  g (ShelleyBlock (TPraos c) AllegraEra) ->
+  g (ShelleyBlock (TPraos c) MaryEra) ->
+  f (ShelleyBlock (TPraos c) AlonzoEra) ->
+  Telescope g f (CardanoEras c)
+pattern TeleAlonzo byron shelley allegra mary x =
+  TS byron (TS shelley (TS allegra (TS mary (TZ x))))
+
+pattern TeleBabbage ::
+  g ByronBlock ->
+  g (ShelleyBlock (TPraos c) ShelleyEra) ->
+  g (ShelleyBlock (TPraos c) AllegraEra) ->
+  g (ShelleyBlock (TPraos c) MaryEra) ->
+  g (ShelleyBlock (TPraos c) AlonzoEra) ->
+  f (ShelleyBlock (Praos c) BabbageEra) ->
+  Telescope g f (CardanoEras c)
+pattern TeleBabbage byron shelley allegra mary alonzo x =
+  TS byron (TS shelley (TS allegra (TS mary (TS alonzo (TZ x)))))
+
+pattern TeleConway ::
+  g ByronBlock ->
+  g (ShelleyBlock (TPraos c) ShelleyEra) ->
+  g (ShelleyBlock (TPraos c) AllegraEra) ->
+  g (ShelleyBlock (TPraos c) MaryEra) ->
+  g (ShelleyBlock (TPraos c) AlonzoEra) ->
+  g (ShelleyBlock (Praos c) BabbageEra) ->
+  f (ShelleyBlock (Praos c) ConwayEra) ->
+  Telescope g f (CardanoEras c)
+pattern TeleConway byron shelley allegra mary alonzo babbage x =
+  TS byron (TS shelley (TS allegra (TS mary (TS alonzo (TS babbage (TZ x))))))
+
+{-# COMPLETE TeleByron, TeleShelley, TeleAllegra, TeleMary, TeleAlonzo, TeleBabbage, TeleConway #-}
+
+modifyLedgerState ::
+  forall c.
+  (ChainValidationState -> ChainValidationState) ->
+  (forall era. EraApp era => NewEpochState era -> NewEpochState era) ->
+  ExtLedgerState (CardanoBlock c) ->
+  ExtLedgerState (CardanoBlock c)
+modifyLedgerState fByronBased fShelleyBased extLedgerState =
+  let modifyShelleyBased ::
+        EraApp era =>
+        ( Current LedgerState (ShelleyBlock (p c) era) ->
+          Telescope (K Past) (Current LedgerState) (CardanoEras c)
+        ) ->
+        Current LedgerState (ShelleyBlock (p c) era) ->
+        ExtLedgerState (CardanoBlock c)
+      modifyShelleyBased tele current =
+        let cs = currentState current
+         in extLedgerState
+              { ledgerState =
+                  HardForkLedgerState $
+                    State.HardForkState $
+                      tele $
+                        current
+                          { currentState =
+                              cs
+                                { shelleyLedgerState = fShelleyBased (shelleyLedgerState cs)
+                                }
+                          }
+              }
+   in case ledgerState extLedgerState of
+        HardForkLedgerState (HardForkState (TeleByron current)) ->
+          let cs = currentState current
+           in extLedgerState
+                { ledgerState =
+                    HardForkLedgerState $
+                      State.HardForkState $
+                        TeleByron $
+                          current
+                            { currentState =
+                                cs
+                                  { byronLedgerState = fByronBased (byronLedgerState cs)
+                                  }
+                            }
+                }
+        HardForkLedgerState (HardForkState (TeleShelley byron current)) ->
+          modifyShelleyBased (TeleShelley byron) current
+        HardForkLedgerState (HardForkState (TeleAllegra byron shelley current)) ->
+          modifyShelleyBased (TeleAllegra byron shelley) current
+        HardForkLedgerState (HardForkState (TeleMary byron shelley allegra current)) ->
+          modifyShelleyBased (TeleMary byron shelley allegra) current
+        HardForkLedgerState (HardForkState (TeleAlonzo byron shelley allegra mary current)) ->
+          modifyShelleyBased (TeleAlonzo byron shelley allegra mary) current
+        HardForkLedgerState (HardForkState (TeleBabbage byron shelley allegra mary alonzo current)) ->
+          modifyShelleyBased (TeleBabbage byron shelley allegra mary alonzo) current
+        HardForkLedgerState (HardForkState (TeleConway byron shelley allegra mary alonzo babbage current)) ->
+          modifyShelleyBased (TeleConway byron shelley allegra mary alonzo babbage) current
+
 encodeNewEpochState :: ExtLedgerState (CardanoBlock c) -> Plain.Encoding
 encodeNewEpochState = applyNewEpochState toCBOR toCBOR
 
@@ -102,7 +227,13 @@ writeNewEpochState :: MonadIO m => FilePath -> ExtLedgerState (CardanoBlock c) -
 writeNewEpochState fp = liftIO . BSL.writeFile fp . Plain.serialize . encodeNewEpochState
 
 readNewEpochState ::
-  (EraGov era, EraCertState era, EraStake era, EraTxOut era, DecCBOR (StashedAVVMAddresses era), MonadIO m) =>
+  ( EraGov era
+  , EraCertState era
+  , EraStake era
+  , EraTxOut era
+  , DecCBOR (StashedAVVMAddresses era)
+  , MonadIO m
+  ) =>
   FilePath -> m (NewEpochState era)
 readNewEpochState fp =
   liftIO (BSL.readFile fp) <&> Plain.decodeFull >>= \case
@@ -330,7 +461,8 @@ lookupRewards ::
   Map (Credential 'Staking) Coin
 lookupRewards creds nes = scRewards $ lookupStakeCredentials creds nes
 
-lookupTotalRewards :: EraCertState era => Set (Credential 'Staking) -> NewEpochState era -> Maybe Coin
+lookupTotalRewards ::
+  EraCertState era => Set (Credential 'Staking) -> NewEpochState era -> Maybe Coin
 lookupTotalRewards creds nes = guard (Map.null credsRewards) >> pure (fold credsRewards)
   where
     credsRewards = lookupRewards creds nes
