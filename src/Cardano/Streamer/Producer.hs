@@ -42,7 +42,11 @@ import Ouroboros.Consensus.Ledger.Abstract (
   applyBlockLedgerResult,
   reapplyBlockLedgerResult,
  )
-import Ouroboros.Consensus.Ledger.Basics (LedgerResult (lrResult), applyChainTickLedgerResult)
+import Ouroboros.Consensus.Ledger.Basics (
+  ComputeLedgerEvents (..),
+  LedgerResult (lrResult),
+  applyChainTickLedgerResult,
+ )
 import Ouroboros.Consensus.Ledger.Extended (ExtLedgerCfg (..), ExtLedgerState (headerState), Ticked)
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import Ouroboros.Consensus.Storage.ChainDB as ChainDB
@@ -280,7 +284,8 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
             <> display (T.pack (showTime Nothing False elapsedTime))
   app <- ask
   let ledgerCfg = ExtLedgerCfg . pInfoConfig $ dsAppProtocolInfo app
-      lrTick = applyChainTickLedgerResult ledgerCfg slotNo prevLedger
+      ledgerEvents = OmitLedgerEvents
+      lrTick = applyChainTickLedgerResult ledgerEvents ledgerCfg slotNo prevLedger
       lrTickResult = lrResult lrTick
       reportException (exc :: SomeException) =
         when (isSyncException exc) $ do
@@ -294,13 +299,13 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
       let applyBlockGranular =
             case dsAppValidationMode app of
               FullValidation -> do
-                case runExcept (applyBlockLedgerResult ledgerCfg block lrTickResult) of
+                case runExcept (applyBlockLedgerResult ledgerEvents ledgerCfg block lrTickResult) of
                   Right lrBlock -> pure $ lrResult lrBlock
                   Left errorMessage -> do
                     logStickyStatus
                     reportValidationError errorMessage slotNo block prevLedger
               ReValidation ->
-                pure $ lrResult $ reapplyBlockLedgerResult ledgerCfg block (lrResult lrTick)
+                pure $ lrResult $ reapplyBlockLedgerResult ledgerEvents ledgerCfg block (lrResult lrTick)
               _ -> error "NoValidation is not yet implemeted"
       res <- inspectBlockState lrTickResult applyBlockGranular a
       when (slotNo `Set.member` blocksToWriteSlotSet) $ do
@@ -444,11 +449,11 @@ instance Display RewardsPerEpoch where
       , display (unEpochNo rewardsEpochNo)
       ]
         ++ [ "\n    "
-               <> displayShow cred
-               <> ": "
-               <> display rew
-               <> "  "
-               <> display wdrl
+            <> displayShow cred
+            <> ": "
+            <> display rew
+            <> "  "
+            <> display wdrl
            | (cred, (Coin rew, Coin wdrl)) <- Map.toList rewardsAndWithdrawals
            ]
     where

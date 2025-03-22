@@ -63,6 +63,7 @@ import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Shelley.Governance
 import Cardano.Ledger.Shelley.LedgerState hiding (LedgerState)
+import Cardano.Ledger.State
 import Cardano.Ledger.UMap as UM
 import Cardano.Ledger.Val
 import Cardano.Slotting.Slot
@@ -102,8 +103,15 @@ writeNewEpochState :: MonadIO m => FilePath -> ExtLedgerState (CardanoBlock c) -
 writeNewEpochState fp = liftIO . BSL.writeFile fp . Plain.serialize . encodeNewEpochState
 
 readNewEpochState ::
-  (EraGov era, EraTxOut era, DecCBOR (StashedAVVMAddresses era), MonadIO m) =>
-  FilePath -> m (NewEpochState era)
+  ( EraGov era
+  , EraStake era
+  , EraCertState era
+  , EraTxOut era
+  , DecCBOR (StashedAVVMAddresses era)
+  , MonadIO m
+  ) =>
+  FilePath ->
+  m (NewEpochState era)
 readNewEpochState fp =
   liftIO (BSL.readFile fp) <&> Plain.decodeFull >>= \case
     Left exc -> throwIO exc
@@ -315,20 +323,26 @@ applyTickedNonByronNewEpochState f =
   applyTickedNewEpochState (\_ _ -> Nothing) (\ti -> Just . f ti)
 
 lookupStakeCredentials ::
+  EraCertState era =>
   Set (Credential 'Staking) ->
   NewEpochState era ->
   UM.StakeCredentials
 lookupStakeCredentials creds nes =
-  let um = dsUnified (certDState (lsCertState (esLState (nesEs nes))))
+  let um = dsUnified (lsCertState (esLState (nesEs nes)) ^. certDStateL)
    in UM.domRestrictedStakeCredentials creds um
 
 lookupRewards ::
+  EraCertState era =>
   Set (Credential 'Staking) ->
   NewEpochState era ->
   Map (Credential 'Staking) Coin
 lookupRewards creds nes = scRewards $ lookupStakeCredentials creds nes
 
-lookupTotalRewards :: Set (Credential 'Staking) -> NewEpochState era -> Maybe Coin
+lookupTotalRewards ::
+  EraCertState era =>
+  Set (Credential 'Staking) ->
+  NewEpochState era ->
+  Maybe Coin
 lookupTotalRewards creds nes = guard (Map.null credsRewards) >> pure (fold credsRewards)
   where
     credsRewards = lookupRewards creds nes

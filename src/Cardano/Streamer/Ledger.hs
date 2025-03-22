@@ -19,7 +19,7 @@ import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary (EncCBOR, ToCBOR)
 import Cardano.Ledger.MemoBytes
 import Cardano.Ledger.Plutus.Language
-import Cardano.Ledger.Shelley.LedgerState (NewEpochState)
+import Cardano.Ledger.Shelley.LedgerState (EraCertState, NewEpochState)
 import Cardano.Ledger.Shelley.Scripts
 import Cardano.Ledger.State
 import Cardano.Streamer.Common
@@ -81,6 +81,8 @@ class
   ( EraSegWits era
   , EraGov era
   , EraUTxO era
+  , EraStake era
+  , EraCertState era
   , ToCBOR (NewEpochState era)
   , EncCBOR (NewEpochState era)
   ) =>

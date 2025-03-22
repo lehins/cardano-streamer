@@ -210,7 +210,7 @@ getTPraosBlockSummary ::
 getTPraosBlockSummary era block =
   let (blockHeaderBody, blockHeaderSize) =
         case bheader (shelleyBlockRaw block) of
-          bh@(BHeader bhBody _) -> (bhBody, bHeaderSize bh)
+          bh@(BHeader bhBody _) -> (bhBody, originalBytesSize bh)
       (txsSeq, blockSize) = case shelleyBlockRaw block of
         Block' _ txs bs -> (fromTxSeq txs, fromIntegral (BSL.length bs))
       blockBodySize = fromIntegral (bsize blockHeaderBody)
