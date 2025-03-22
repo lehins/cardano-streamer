@@ -11,13 +11,15 @@ In order to get working with Cardano a few C dependencies need to be installed f
 * `secp256k1`
 * `libblst`
 
+#### Using `nix`
 
-```shell
-$ cabal update
-$ cabal install
-```
+- `nix flake update haskellNix` to update all of the Haskell ecosystem.
+- `nix flake update haskellNix/hackage` for updating Hackage dependencies only - necessary when
+  `index-state` is updated
+- `nix flake update CHaP` for CHaP (Cardano Haskell Packages) - necessary when
+  `index-state` is updated
 
-#### `Linux`
+#### Without `nix`
 
 * Ubuntu
 
@@ -33,6 +35,22 @@ $ ./scripts/install-secp256k1.sh
 $ sudo zypper in pkg-config autoconf automake libtool libsodium-devel zlib-devel
 $ ./scripts/install-blst.sh
 $ ./scripts/install-secp256k1.sh
+```
+
+
+## Building
+
+If using `nix`, first it is necessary to get into the nix shell:
+
+```shell
+$ nix develop
+```
+
+After that business is usual:
+
+```shell
+$ cabal update
+$ cabal install
 ```
 
 ## Chain data
