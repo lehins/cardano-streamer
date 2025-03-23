@@ -206,7 +206,7 @@ rewardsCommandParser =
   ( ComputeRewards
       <$> NE.some1
         ( option
-            (readWithMaybe parseStakingCredential)
+            (readWithMaybe parseRewardAccount)
             (long "address" <> help "Bech32 encoded Addres with 'addr' prefix")
         )
   )

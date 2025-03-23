@@ -1,9 +1,13 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableSuperClasses #-}
 
@@ -17,12 +21,18 @@ import Cardano.Ledger.Babbage.Collateral (collOuts)
 import Cardano.Ledger.Babbage.Core
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary (EncCBOR, ToCBOR)
+import Cardano.Ledger.Coin
+import qualified Cardano.Ledger.Conway.Rules as Conway
+import Cardano.Ledger.Credential
 import Cardano.Ledger.MemoBytes
 import Cardano.Ledger.Plutus.Language
 import Cardano.Ledger.Shelley.LedgerState (EraCertState, NewEpochState)
+import Cardano.Ledger.Shelley.Rewards (aggregateRewards)
+import qualified Cardano.Ledger.Shelley.Rules as Shelley
 import Cardano.Ledger.Shelley.Scripts
 import Cardano.Ledger.State
 import Cardano.Streamer.Common
+import Control.State.Transition.Extended
 import Data.Aeson
 import Data.Aeson.Types (toJSONKeyText)
 import qualified Data.ByteString.Short as SBS
@@ -77,6 +87,7 @@ appScriptBytes = \case
 
 appScriptSize :: AppScript -> Int
 appScriptSize = SBS.length . appScriptBytes
+
 class
   ( EraSegWits era
   , EraGov era
@@ -98,6 +109,21 @@ class
 
   -- | All of the unspent outputs produced by the transaction
   utxoTx :: Tx era -> UTxO era
+
+  getRewardsFromEvents ::
+    proxy era ->
+    Event (EraRule "TICK" era) ->
+    Map (Credential 'Staking) Coin
+  default getRewardsFromEvents ::
+    ( Event (EraRule "TICK" era) ~ Shelley.ShelleyTickEvent era
+    , Event (EraRule "NEWEPOCH" era) ~ Shelley.ShelleyNewEpochEvent era
+    ) =>
+    proxy era ->
+    Event (EraRule "TICK" era) ->
+    Map (Credential 'Staking) Coin
+  getRewardsFromEvents _ (Shelley.TickNewEpochEvent (Shelley.TotalRewardEvent _ rs)) =
+    aggregateRewards (ProtVer (eraProtVerLow @era) 0) rs
+  getRewardsFromEvents _ _ = Map.empty
 
 instance EraApp ShelleyEra where
   appScript = AppMultiSig
@@ -130,6 +156,9 @@ instance EraApp ConwayEra where
   utxoTx tx
     | tx ^. isValidTxL == IsValid True = txouts (tx ^. bodyTxL)
     | otherwise = collOuts (tx ^. bodyTxL)
+  getRewardsFromEvents _ (Shelley.TickNewEpochEvent (Conway.TotalRewardEvent _ rs)) =
+    aggregateRewards (ProtVer (eraProtVerLow @ConwayEra) 0) rs
+  getRewardsFromEvents _ _ = Map.empty
 
 appTimelockScript ::
   (EraScript era, NativeScript era ~ Timelock era) => Script era -> Maybe AppScript

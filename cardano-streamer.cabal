@@ -24,8 +24,9 @@ library
                      , Cardano.Streamer.LedgerState
                      , Cardano.Streamer.Producer
                      , Cardano.Streamer.ProtocolInfo
-                     , Cardano.Streamer.Time
+                     , Cardano.Streamer.Rewards
                      , Cardano.Streamer.RTS
+                     , Cardano.Streamer.Time
 
                     -- TODO: finish and reinstate when `io-classes-1.0` is in use.
                     --
@@ -61,6 +62,7 @@ library
                      , contra-tracer
                      , criterion-measurement
                      , FailT
+                     , strict-sop-core
                      , ouroboros-consensus >= 0.22.0.0
                      , ouroboros-consensus-protocol
                      , ouroboros-consensus-cardano
@@ -71,7 +73,9 @@ library
                      , resource-registry
                      , rio
                      , serialise
+                     , small-steps
                      , text
+                     , time
                      , transformers
                      , unliftio
                      , vector

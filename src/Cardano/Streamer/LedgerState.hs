@@ -25,6 +25,8 @@ module Cardano.Streamer.LedgerState (
   lookupTotalRewards,
   writeNewEpochState,
   extLedgerStateEpochNo,
+  extractLedgerEvents,
+  globalsFromLedgerConfig,
   detectNewRewards,
   EpochBlockStats (..),
   BlockStats (..),
@@ -54,7 +56,7 @@ import qualified Cardano.Chain.UTxO as B
 import qualified Cardano.Chain.Update.Validation.Interface as Byron (State (currentEpoch))
 import Cardano.Crypto.Hash (hashFromBytes)
 import qualified Cardano.Crypto.Hashing as Byron (hashToBytes)
-import Cardano.Ledger.BaseTypes (BlockNo (..))
+import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary
 import qualified Cardano.Ledger.Binary.Plain as Plain
 import Cardano.Ledger.CertState
@@ -66,35 +68,52 @@ import Cardano.Ledger.Shelley.LedgerState hiding (LedgerState)
 import Cardano.Ledger.State
 import Cardano.Ledger.UMap as UM
 import Cardano.Ledger.Val
+import Cardano.Slotting.EpochInfo.API (hoistEpochInfo)
 import Cardano.Slotting.Slot
 import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
 import Cardano.Streamer.Ledger
+import Control.Monad.Trans.Except (runExcept, withExceptT)
 import Data.Aeson (ToJSON (..), defaultOptions, fieldLabelModifier, genericToJSON)
 import qualified Data.ByteString.Lazy as BSL
 import Data.Csv (Field, ToNamedRecord (..), header, namedRecord, toField, (.=))
 import qualified Data.Map.Merge.Strict as Map
 import Data.Maybe (fromJust)
 import Data.SOP.BasicFunctors
+import Data.SOP.Strict
 import Data.SOP.Telescope
+import Ouroboros.Consensus.Byron.ByronHFC ()
 import Ouroboros.Consensus.Byron.Ledger.Block
 import Ouroboros.Consensus.Byron.Ledger.Ledger
 import Ouroboros.Consensus.Cardano.Block
-import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (OneEraTipInfo (..))
+import Ouroboros.Consensus.Config (TopLevelConfig (..))
+import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
+  OneEraLedgerEvent (..),
+  OneEraTipInfo (..),
+  PerEraLedgerConfig (..),
+ )
+import Ouroboros.Consensus.HardFork.Combinator.Basics
 import Ouroboros.Consensus.HardFork.Combinator.Ledger
+import Ouroboros.Consensus.HardFork.Combinator.PartialConfig
+import Ouroboros.Consensus.HardFork.Combinator.State (epochInfoLedger)
 import Ouroboros.Consensus.HardFork.Combinator.State.Types as State
 import Ouroboros.Consensus.HeaderValidation (
   AnnTip (..),
   HeaderState (..),
   TipInfoIsEBB (..),
  )
+import Ouroboros.Consensus.Ledger.Basics
 import Ouroboros.Consensus.Ledger.Extended
 import Ouroboros.Consensus.Protocol.Praos
 import Ouroboros.Consensus.Protocol.TPraos
+import Ouroboros.Consensus.Shelley.HFEras ()
 import Ouroboros.Consensus.Shelley.Ledger.Block
 import Ouroboros.Consensus.Shelley.Ledger.Ledger
-import Ouroboros.Consensus.TypeFamilyWrappers (WrapTipInfo (..))
+import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()
+import Ouroboros.Consensus.Shelley.ShelleyHFC ()
+import Ouroboros.Consensus.TypeFamilyWrappers (WrapLedgerEvent (..), WrapTipInfo (..))
 import qualified RIO.Map as Map
+import qualified RIO.Text as T
 
 encodeNewEpochState :: ExtLedgerState (CardanoBlock c) -> Plain.Encoding
 encodeNewEpochState = applyNewEpochState toCBOR toCBOR
@@ -225,6 +244,39 @@ tipFromExtLedgerState ::
   ExtLedgerState (CardanoBlock StandardCrypto) -> Maybe Tip
 tipFromExtLedgerState = tipFromHeaderState . headerState
 
+globalsFromLedgerConfig ::
+  CardanoEra ->
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  TopLevelConfig (CardanoBlock StandardCrypto) ->
+  Maybe Globals
+globalsFromLedgerConfig era (ExtLedgerState ledgerState _) lc =
+  globalsWithDummyEpochInfo <&> \globals -> globals{epochInfo = actualEpochInfo}
+  where
+    hardForkLedgerConfig = topLevelConfigLedger lc
+    HardForkLedgerState hardForkState = ledgerState
+    actualEpochInfo =
+      hoistEpochInfo
+        (runExcept . withExceptT (T.pack . show))
+        $ epochInfoLedger hardForkLedgerConfig hardForkState
+    globalsWithDummyEpochInfo =
+      case getPerEraLedgerConfig $ hardForkLedgerConfigPerEra hardForkLedgerConfig of
+        WrapPartialLedgerConfig _partialLedgerConfigByron
+          :* WrapPartialLedgerConfig partialLedgerConfigShelley
+          :* WrapPartialLedgerConfig partialLedgerConfigAllegra
+          :* WrapPartialLedgerConfig partialLedgerConfigMary
+          :* WrapPartialLedgerConfig partialLedgerConfigAlonzo
+          :* WrapPartialLedgerConfig partialLedgerConfigBabbage
+          :* WrapPartialLedgerConfig partialLedgerConfigConway
+          :* Nil ->
+            case era of
+              Byron -> Nothing
+              Shelley -> Just $ shelleyLedgerGlobals $ shelleyLedgerConfig partialLedgerConfigShelley
+              Mary -> Just $ shelleyLedgerGlobals $ shelleyLedgerConfig partialLedgerConfigAllegra
+              Allegra -> Just $ shelleyLedgerGlobals $ shelleyLedgerConfig partialLedgerConfigMary
+              Alonzo -> Just $ shelleyLedgerGlobals $ shelleyLedgerConfig partialLedgerConfigAlonzo
+              Babbage -> Just $ shelleyLedgerGlobals $ shelleyLedgerConfig partialLedgerConfigBabbage
+              Conway -> Just $ shelleyLedgerGlobals $ shelleyLedgerConfig partialLedgerConfigConway
+
 tipFromHeaderState ::
   HeaderState (CardanoBlock StandardCrypto) -> Maybe Tip
 tipFromHeaderState hs = do
@@ -346,6 +398,28 @@ lookupTotalRewards ::
 lookupTotalRewards creds nes = guard (Map.null credsRewards) >> pure (fold credsRewards)
   where
     credsRewards = lookupRewards creds nes
+
+extractLedgerEvents ::
+  [AuxLedgerEvent (ExtLedgerState (CardanoBlock c))] ->
+  (forall era. EraApp era => ShelleyLedgerEvent era -> Maybe e) ->
+  [e]
+extractLedgerEvents extEvents handleEvent =
+  mapMaybe applyTickLedgerEvent extEvents
+  where
+    applyTickLedgerEvent oneEraEvent =
+      case fromTip $ getOneEraLedgerEvent oneEraEvent of
+        TS _ (TS _ (TS _ (TS _ (TS _ (TS _ (TZ (WrapLedgerEvent event))))))) ->
+          handleEvent event
+        TS _ (TS _ (TS _ (TS _ (TS _ (TZ (WrapLedgerEvent event)))))) ->
+          handleEvent event
+        TS _ (TS _ (TS _ (TS _ (TZ (WrapLedgerEvent event))))) ->
+          handleEvent event
+        TS _ (TS _ (TS _ (TZ (WrapLedgerEvent event)))) ->
+          handleEvent event
+        TS _ (TS _ (TZ (WrapLedgerEvent event))) ->
+          handleEvent event
+        TS _ (TZ (WrapLedgerEvent event)) ->
+          handleEvent event
 
 extLedgerStateEpochNo :: ExtLedgerState (CardanoBlock c) -> EpochNo
 extLedgerStateEpochNo =

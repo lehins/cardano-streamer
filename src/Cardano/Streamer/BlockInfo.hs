@@ -64,16 +64,6 @@ data BlockWithInfo b = BlockWithInfo
 instance Functor BlockWithInfo where
   fmap f bwi = bwi{biBlockComponent = f (biBlockComponent bwi)}
 
-data CardanoEra
-  = Byron
-  | Shelley
-  | Allegra
-  | Mary
-  | Alonzo
-  | Babbage
-  | Conway
-  deriving (Eq, Show)
-
 instance Display CardanoEra where
   display = displayShow
 

@@ -5,8 +5,10 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeApplications #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Cardano.Streamer.Common (
@@ -14,6 +16,7 @@ module Cardano.Streamer.Common (
   AppConfig (..),
   Opts (..),
   Command (..),
+  CardanoEra (..),
   BlockHashOrSlotNo (..),
   throwExceptT,
   throwShowExceptT,
@@ -22,7 +25,8 @@ module Cardano.Streamer.Common (
   ValidationMode (..),
   HasImmutableDb (..),
   HasResourceRegistry (..),
-  parseStakingCredential,
+  formatRewardAccount,
+  parseRewardAccount,
   getElapsedTime,
   getDiskSnapshotFilePath,
   writeReport,
@@ -35,10 +39,20 @@ module Cardano.Streamer.Common (
   module X,
 ) where
 
-import qualified Cardano.Address as A
+import qualified Cardano.Address as A (NetworkTag (..), bech32, fromBech32)
+import qualified Cardano.Address.KeyHash as A
+import qualified Cardano.Address.Script as A
 import qualified Cardano.Address.Style.Shelley as A
-import Cardano.Crypto.Hash.Class (hashFromBytes, hashToTextAsHex)
-import Cardano.Ledger.BaseTypes (BlockNo (..), EpochNo (..), SlotNo (..))
+import Cardano.Crypto.Hash.Class (hashFromBytes, hashToBytes, hashToTextAsHex)
+import Cardano.Ledger.Address
+import Cardano.Ledger.BaseTypes (
+  BlockNo (..),
+  EpochNo (..),
+  SlotNo (..),
+  networkToWord8,
+  word8ToNetwork,
+ )
+import Cardano.Ledger.Coin
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Hashes
 import Cardano.Streamer.Time
@@ -47,7 +61,10 @@ import Control.ResourceRegistry (ResourceRegistry)
 import Control.Tracer (Tracer (..))
 import qualified Data.Aeson as Aeson (ToJSON, ToJSONKey, encode)
 import Data.ByteString.Builder as BSL (lazyByteString)
+import qualified Data.ByteString.Char8 as BS8 (pack)
 import Data.Csv as Csv
+import Data.Fixed
+import Data.Time.Format.ISO8601
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import qualified Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
@@ -63,9 +80,20 @@ runRIO :: MonadIO m => r -> RIO r a -> m a
 runRIO env = liftIO . flip runReaderT env
 
 deriving instance Display SlotNo
+deriving instance ToField SlotNo
+
 deriving instance Display EpochNo
-deriving instance Display BlockNo
+deriving instance ToField EpochNo
 deriving instance Aeson.ToJSONKey EpochNo
+
+deriving instance Display BlockNo
+
+instance ToField UTCTime where
+  toField = BS8.pack . iso8601Show
+
+instance ToField Coin where
+  toField (Coin c) =
+    BS8.pack $ show (MkFixed c :: Fixed E6)
 
 instance Display DiskSnapshot where
   textDisplay = T.pack . snapshotToFileName
@@ -78,6 +106,19 @@ instance Display (SafeHash a) where
 
 class HasResourceRegistry env where
   registryL :: Lens' env (ResourceRegistry IO)
+
+data CardanoEra
+  = Byron
+  | Shelley
+  | Allegra
+  | Mary
+  | Alonzo
+  | Babbage
+  | Conway
+  deriving (Eq, Show)
+
+instance ToField CardanoEra where
+  toField = BS8.pack . show
 
 mkTracer ::
   (MonadReader env m1, MonadIO m2, HasLogFunc env, Show a) =>
@@ -131,6 +172,7 @@ data DbStreamerApp blk = DbStreamerApp
   , dsAppValidationMode :: !ValidationMode
   , dsAppStartTime :: !UTCTime
   , dsAppRTSStatsHandle :: !(Maybe Handle)
+  , dsAppRewardsHandles :: !(Map (Credential 'Staking) Handle)
   }
 
 class HasImmutableDb env blk | env -> blk where
@@ -170,15 +212,15 @@ data Command
   = Replay
   | Benchmark
   | Stats
-  | ComputeRewards (NonEmpty (Credential 'Staking))
+  | ComputeRewards (NonEmpty RewardAccount)
   deriving (Show)
 
 instance Display Command where
   display = \case
     Replay -> "Replay"
     Benchmark -> "Benchmark"
-    Stats -> "Statistics"
-    ComputeRewards _xs -> "Rewards" -- for: " <> intersperce "," (map displayShow xs)
+    Stats -> "Compute Statistics"
+    ComputeRewards _xs -> "Compute Rewards" -- for: " <> intersperce "," (map displayShow xs)
 
 newtype BlockHashOrSlotNo = BlockHashOrSlotNo
   {unBlockHashOrSlotNo :: Either SlotNo (SafeHash EraIndependentBlockBody)}
@@ -219,8 +261,19 @@ data Opts = Opts
   }
   deriving (Show)
 
-parseStakingCredential :: MonadFail m => Text -> m (Credential 'Staking)
-parseStakingCredential txt =
+formatRewardAccount :: RewardAccount -> Text
+formatRewardAccount RewardAccount{raNetwork, raCredential} =
+  either (error . show) A.bech32 $ A.stakeAddress discriminant $ credentialToDelegation raCredential
+  where
+    discriminant = A.NetworkTag $ fromIntegral @Word8 @Word32 $ networkToWord8 $ raNetwork
+    credentialToDelegation = \case
+      KeyHashObj (KeyHash kh) ->
+        A.DelegationFromKeyHash $ A.KeyHash A.Delegation $ hashToBytes kh
+      ScriptHashObj (ScriptHash sh) ->
+        A.DelegationFromScriptHash $ A.ScriptHash $ hashToBytes sh
+
+parseRewardAccount :: MonadFail m => Text -> m RewardAccount
+parseRewardAccount txt =
   case A.fromBech32 txt of
     Nothing -> fail "Can't parse as Bech32 Address"
     Just addr ->
@@ -228,9 +281,15 @@ parseStakingCredential txt =
         Left err -> fail $ show err
         Right (A.InspectAddressByron{}) -> fail "Byron Address can't have Staking Crednetial"
         Right (A.InspectAddressIcarus{}) -> fail "Icarus Address can't have Staking Crednetial"
-        Right (A.InspectAddressShelley ai) ->
-          maybe (fail $ "Address does not contain a Staking Credential: " ++ show txt) pure $
-            (KeyHashObj . KeyHash . partialHash <$> A.infoStakeKeyHash ai)
+        Right (A.InspectAddressShelley ai) -> do
+          let networkTag = A.unNetworkTag $ A.infoNetworkTag ai
+          tag <- maybe (fail $ "Invalid NetworkTag value: " <> show networkTag) pure $ do
+            guard (networkTag <= fromIntegral (maxBound :: Word8))
+            word8ToNetwork $ fromIntegral @Word32 @Word8 networkTag
+          maybe
+            (fail $ "Address does not contain a Staking Credential: " ++ show txt)
+            (pure . RewardAccount tag)
+            $ (KeyHashObj . KeyHash . partialHash <$> A.infoStakeKeyHash ai)
               <|> (ScriptHashObj . ScriptHash . partialHash <$> A.infoStakeScriptHash ai)
   where
     partialHash bs =

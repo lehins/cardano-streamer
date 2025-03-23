@@ -4,6 +4,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
@@ -11,20 +12,26 @@
 module Cardano.Streamer.Producer where
 
 import Cardano.Crypto.Hash.Class (hashToTextAsHex)
+import Cardano.Ledger.Address
+import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary.Plain (decodeFullDecoder)
 import Cardano.Ledger.Coin
+import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
-import Cardano.Ledger.Hashes
+import Cardano.Slotting.EpochInfo.API (epochInfoSlotToUTCTime)
 import Cardano.Streamer.Benchmark
 import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
+import Cardano.Streamer.Ledger
 import Cardano.Streamer.LedgerState
 import Cardano.Streamer.ProtocolInfo
 import Cardano.Streamer.RTS
+import Cardano.Streamer.Rewards
 import Cardano.Streamer.Time
 import Conduit
 import Control.Monad.Trans.Except
 import Control.ResourceRegistry (withRegistry)
+import Control.State.Transition.Extended
 import Data.Char (toLower)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Merge.Strict as Map
@@ -44,11 +51,12 @@ import Ouroboros.Consensus.Ledger.Abstract (
  )
 import Ouroboros.Consensus.Ledger.Basics (
   ComputeLedgerEvents (..),
-  LedgerResult (lrResult),
+  LedgerResult (..),
   applyChainTickLedgerResult,
  )
 import Ouroboros.Consensus.Ledger.Extended (ExtLedgerCfg (..), ExtLedgerState (headerState), Ticked)
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
+import Ouroboros.Consensus.Shelley.Ledger.Ledger (ShelleyLedgerEvent (..))
 import Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
@@ -169,6 +177,30 @@ sourceBlocksWithState blockComponent initState action =
     sourceBlocksWithAccState blockComponent initState () $
       \s a b -> (\(s', c) -> (s', a, c)) <$> action s b
 
+produceLedgerTickEvents ::
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  (forall proxy era. EraApp era => proxy era -> Event (EraRule "TICK" era) -> e) ->
+  ConduitT
+    a
+    (CardanoEra, EpochNo, SlotNo, Maybe EpochNo, ExtLedgerState (CardanoBlock StandardCrypto), [e])
+    (ReaderT (DbStreamerApp (CardanoBlock StandardCrypto)) IO)
+    (ExtLedgerState (CardanoBlock StandardCrypto))
+produceLedgerTickEvents initExtLedgerState handleTickEvent =
+  sourceBlocksWithState GetBlock initExtLedgerState $ \extLedgerState bi -> do
+    let extractEvents lr appBlock curSlotNo = do
+          let prevEpochNo = extLedgerStateEpochNo extLedgerState
+              -- TODO, check whether epoch transition can be reliably extracted from ti
+              (_ti, curEpochNo) = tickedExtLedgerStateEpochNo (lrResult lr)
+              newEpochNo = guard (curEpochNo /= prevEpochNo) >> Just curEpochNo
+              era = getCardanoEra (biBlockComponent bi)
+              es = extractLedgerEvents (lrEvents lr) $ \event ->
+                case event of
+                  ShelleyLedgerEventBBODY _ -> Nothing
+                  ShelleyLedgerEventTICK tickEvent -> Just (handleTickEvent event tickEvent)
+          newExtLedgerState <- appBlock
+          pure (newExtLedgerState, (era, prevEpochNo, curSlotNo, newEpochNo, newExtLedgerState, es))
+    advanceBlockGranular (\_ -> pure) extractEvents extLedgerState bi
+
 foldBlocksWithState ::
   ( MonadIO m
   , MonadReader (DbStreamerApp (CardanoBlock StandardCrypto)) m
@@ -218,7 +250,9 @@ advanceRawBlockGranular ::
     SlotNo ->
     RIO (DbStreamerApp (CardanoBlock StandardCrypto)) b
   ) ->
-  ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto)) ->
+  ( LedgerResult
+      (ExtLedgerState (CardanoBlock StandardCrypto))
+      (Ticked (ExtLedgerState (CardanoBlock StandardCrypto))) ->
     RIO
       (DbStreamerApp (CardanoBlock StandardCrypto))
       (ExtLedgerState (CardanoBlock StandardCrypto)) ->
@@ -248,7 +282,9 @@ advanceBlockGranular ::
     SlotNo ->
     RIO (DbStreamerApp (CardanoBlock StandardCrypto)) a
   ) ->
-  ( Ticked (ExtLedgerState (CardanoBlock StandardCrypto)) ->
+  ( LedgerResult
+      (ExtLedgerState (CardanoBlock StandardCrypto))
+      (Ticked (ExtLedgerState (CardanoBlock StandardCrypto))) ->
     RIO
       (DbStreamerApp (CardanoBlock StandardCrypto))
       (ExtLedgerState (CardanoBlock StandardCrypto)) ->
@@ -284,8 +320,9 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
             <> display (T.pack (showTime Nothing False elapsedTime))
   app <- ask
   let ledgerCfg = ExtLedgerCfg . pInfoConfig $ dsAppProtocolInfo app
-      ledgerEvents = OmitLedgerEvents
-      lrTick = applyChainTickLedgerResult ledgerEvents ledgerCfg slotNo prevLedger
+      tickEvents =
+        if null (dsAppRewardsHandles app) then OmitLedgerEvents else ComputeLedgerEvents
+      lrTick = applyChainTickLedgerResult tickEvents ledgerCfg slotNo prevLedger
       lrTickResult = lrResult lrTick
       reportException (exc :: SomeException) =
         when (isSyncException exc) $ do
@@ -299,15 +336,17 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
       let applyBlockGranular =
             case dsAppValidationMode app of
               FullValidation -> do
-                case runExcept (applyBlockLedgerResult ledgerEvents ledgerCfg block lrTickResult) of
+                case runExcept (applyBlockLedgerResult OmitLedgerEvents ledgerCfg block lrTickResult) of
                   Right lrBlock -> pure $ lrResult lrBlock
                   Left errorMessage -> do
                     logStickyStatus
                     reportValidationError errorMessage slotNo block prevLedger
               ReValidation ->
-                pure $ lrResult $ reapplyBlockLedgerResult ledgerEvents ledgerCfg block (lrResult lrTick)
+                pure $
+                  lrResult $
+                    reapplyBlockLedgerResult OmitLedgerEvents ledgerCfg block (lrResult lrTick)
               _ -> error "NoValidation is not yet implemeted"
-      res <- inspectBlockState lrTickResult applyBlockGranular a
+      res <- inspectBlockState lrTick applyBlockGranular a
       when (slotNo `Set.member` blocksToWriteSlotSet) $ do
         atomicModifyIORef' (dsAppWriteBlocks app) $
           \(slotNoSet, blockHashSet) -> ((Set.delete slotNo slotNoSet, blockHashSet), ())
@@ -377,7 +416,7 @@ advanceBlock inspectBlockState !prevLedger !block =
     (\_ _ -> pure ())
     ( \ts getExtLedgerState _ -> do
         s <- getExtLedgerState
-        res <- inspectBlockState ts s
+        res <- inspectBlockState (lrResult ts) s
         pure (s, res)
     )
     prevLedger
@@ -548,6 +587,51 @@ replayChain ::
 replayChain initLedgerState = do
   runConduit $ foldBlocksWithState GetBlock initLedgerState advanceBlock_
 
+exportRewards ::
+  Set (Credential 'Staking) ->
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  RIO (DbStreamerApp (CardanoBlock StandardCrypto)) ()
+exportRewards creds initExtLedgerState = do
+  app <- ask
+  let exportRewardsToHandle (era, _prevEpochNo, slotNo, mNewEpochNo, newExtLedgerState, rewards) = do
+        -- Keep only non-zero reward distributions
+        let nonZeroRewards = Map.filter (/= mempty) rewards
+            -- Decidig factor for producing rewards
+            newEpochNoWithGlobals = do
+              -- only on the epoch boundary
+              newEpochNo <- mNewEpochNo
+              -- only when there are non-zero rewards
+              guard (not (Map.null nonZeroRewards))
+
+              globals <-
+                globalsFromLedgerConfig era newExtLedgerState $ pInfoConfig $ dsAppProtocolInfo app
+              pure (newEpochNo, globals)
+        forM_ newEpochNoWithGlobals $ \(newEpochNo, globals) -> do
+          case epochInfoSlotToUTCTime (epochInfo globals) (systemStart globals) slotNo of
+            Left err ->
+              logError $ "Could not convert slot " <> display slotNo <> " to UTCTime: " <> display err
+            Right utcTime -> do
+              let rewardsWithHandles =
+                    [ (hdl, r)
+                    | (cred, hdl) <-
+                        Map.toList (dsAppRewardsHandles app)
+                    , Just r <- [Map.lookup cred rewards]
+                    ]
+              forM_ rewardsWithHandles $ \(hdl, r) ->
+                writeRewardDistribution hdl $
+                  RewardDistribution
+                    { rdEra = era
+                    , rdEpochNo = newEpochNo
+                    , rdSlotNo = slotNo
+                    , rdUTCTime = utcTime
+                    , rdRewardAmount = r
+                    }
+              logInfo $ "Written rewards distributed at the beginning of epoch " <> display newEpochNo
+  runConduit $
+    void (produceLedgerTickEvents initExtLedgerState getRewardsFromEvents)
+      .| mapC (fmap ((`Map.restrictKeys` creds) . Map.unionsWith (<>)))
+      .| mapM_C exportRewardsToHandle
+
 computeRewards ::
   Set (Credential 'Staking) ->
   ExtLedgerState (CardanoBlock StandardCrypto) ->
@@ -629,7 +713,9 @@ runApp Opts{..} = do
                 else case oOutDir of
                   Nothing ->
                     throwString $
-                      "Supplied a relative path for RTS stats: '" <> rtsStatsFilePath <> "' without supplying the OUT_DIR"
+                      "Supplied a relative path for RTS stats: '"
+                        <> rtsStatsFilePath
+                        <> "' without supplying the OUT_DIR"
                   Just outDir -> pure $ outDir </> rtsStatsFilePath
             createMissingDirectory "RTS Stats File" (dropFileName fullPath)
             whenM (doesPathExist fullPath) $
@@ -661,13 +747,35 @@ runApp Opts{..} = do
               Replay -> void $ replayChain initLedger
               Benchmark -> void $ replayBenchmarkReport initLedger
               Stats -> void $ runConduit $ calcEpochStats initLedger
-              ComputeRewards creds ->
-                void $ computeRewards (Set.fromList $ NE.toList creds) initLedger
+              ComputeRewards rewardAccounts -> do
+                case oOutDir of
+                  Nothing ->
+                    logError "Output directory is required for exporting rewards"
+                  Just outDir -> do
+                    let filePaths =
+                          [ ( raCredential rewardAccount
+                            , outDir </> T.unpack (formatRewardAccount rewardAccount) <.> "csv"
+                            )
+                          | rewardAccount <- NE.toList rewardAccounts
+                          ]
+                        stakingCredentialSet =
+                          Set.fromList $ map raCredential $ NE.toList rewardAccounts
+                    withFiles filePaths $ \hdls ->
+                      local (\env -> env{dsAppRewardsHandles = hdls}) $ do
+                        writeRewardsHeaders
+                        exportRewards stakingCredentialSet initLedger
   where
     withMaybeFile mFilePath action =
       case mFilePath of
         Nothing -> action Nothing
         Just fp -> withBinaryFileDurable fp WriteMode (action . Just)
+    withFiles filePaths action = go [] filePaths
+      where
+        go hdls [] = action $ Map.fromList hdls
+        go hdls ((ra, fp) : fps) =
+          withBinaryFileDurable fp WriteMode $ \hdl -> do
+            logInfo $ "Opened file for exporting rewards " <> displayShow fp
+            go ((ra, hdl) : hdls) fps
     createMissingDirectory name dir =
       unlessM (doesDirectoryExist dir) $ do
         logInfo $ "Creating " <> name <> " directory: " <> displayShow dir
