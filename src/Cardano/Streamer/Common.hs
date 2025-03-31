@@ -120,6 +120,9 @@ data CardanoEra
 instance ToField CardanoEra where
   toField = BS8.pack . show
 
+instance Display CardanoEra where
+  display = displayShow
+
 mkTracer ::
   (MonadReader env m1, MonadIO m2, HasLogFunc env, Show a) =>
   -- | Optional prefix for tracing messages

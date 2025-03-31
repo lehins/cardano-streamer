@@ -64,9 +64,6 @@ data BlockWithInfo b = BlockWithInfo
 instance Functor BlockWithInfo where
   fmap f bwi = bwi{biBlockComponent = f (biBlockComponent bwi)}
 
-instance Display CardanoEra where
-  display = displayShow
-
 data TxSummary = TxSummary
   { tpSize :: !Int32
   , tpInsCount :: !Int16
