@@ -120,7 +120,7 @@ withImmutableDb ::
   , GetPrevHash blk
   , ConvertRawHash blk
   , EncodeDisk blk blk
-  , DecodeDisk blk (LByteString -> blk)
+  , DecodeDisk blk blk
   , DecodeDiskDep (NestedCtxt Header) blk
   , ReconstructNestedCtxt Header blk
   , HasBinaryBlockInfo blk
@@ -190,7 +190,7 @@ readInitLedgerState diskSnapshot = do
   ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
   let
     extLedgerStateDecoder =
-      decodeExtLedgerState (decodeDisk ccfg) (decodeDisk ccfg) (decodeDisk ccfg)
+      decodeExtLedgerState (decodeDisk ccfg mempty) (decodeDisk ccfg mempty) (decodeDisk ccfg mempty)
   (ledgerState, measure) <-
     measureAction $
       liftIO $

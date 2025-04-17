@@ -129,9 +129,9 @@ getRawBlock =
       case byronBlockRaw byronBlock of
         B.ABOBBlock abBlock -> B.blockAnnotation abBlock
         B.ABOBBoundary abBlock -> B.boundaryAnnotation abBlock
-    blockBytes _ block =
-      case shelleyBlockRaw block of
-        Block' _ _ bs -> toStrictBytes bs
+    blockBytes _ block = mempty
+      -- case shelleyBlockRaw block of
+      --   Block' _ _ bs -> mempty --toStrictBytes bs
     mkRawBlock bs =
       let rb =
             RawBlock
@@ -199,7 +199,7 @@ getTPraosBlockSummary era block =
         case bheader (shelleyBlockRaw block) of
           bh@(BHeader bhBody _) -> (bhBody, originalBytesSize bh)
       (txsSeq, blockSize) = case shelleyBlockRaw block of
-        Block' _ txs bs -> (fromTxSeq txs, fromIntegral (BSL.length bs))
+        Block _ txs -> (fromTxSeq txs, 0) --fromIntegral (BSL.length bs))
       blockBodySize = fromIntegral (bsize blockHeaderBody)
    in assert (blockSize == blockHeaderSize + blockBodySize) $
         BlockSummary
@@ -224,7 +224,7 @@ getPraosBlockSummary era block =
       blockHeaderBody = headerBody blockHeader
       blockHeaderSize = headerSize blockHeader
       (txsSeq, blockSize) = case shelleyBlockRaw block of
-        Block' _ txs bs -> (fromTxSeq txs, fromIntegral (BSL.length bs))
+        Block _ txs -> (fromTxSeq txs, 0)--fromIntegral (BSL.length bs))
       blockBodySize = fromIntegral (hbBodySize blockHeaderBody)
    in assert (blockSize == blockHeaderSize + blockBodySize) $
         BlockSummary

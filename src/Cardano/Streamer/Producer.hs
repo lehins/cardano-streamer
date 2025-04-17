@@ -269,8 +269,8 @@ advanceRawBlockGranular ::
 advanceRawBlockGranular decodeBlock inspectTickState inspectBlockState prevLedger bwi = do
   ccfg <- configCodec . pInfoConfig . dsAppProtocolInfo <$> ask
   let blockDecoder =
-        case decodeFullDecoder "Block" (decodeDisk ccfg) (biBlockComponent bwi) of
-          Right decBlock -> pure $ decBlock (biBlockComponent bwi)
+        case decodeFullDecoder "Block" (decodeDisk ccfg (biBlockComponent bwi)) (biBlockComponent bwi) of
+          Right decBlock -> pure decBlock
           Left err -> throwString $ show err
   (block, a) <- decodeBlock (biBlockComponent bwi) blockDecoder
   let inspectBlockState' tickedExtLedgerState ticker b =

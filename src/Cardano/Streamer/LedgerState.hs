@@ -59,7 +59,7 @@ import qualified Cardano.Crypto.Hashing as Byron (hashToBytes)
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary
 import qualified Cardano.Ledger.Binary.Plain as Plain
-import Cardano.Ledger.CertState
+import Cardano.Ledger.State
 import Cardano.Ledger.Coin
 import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
