@@ -53,7 +53,7 @@ library
                      , cardano-ledger-byron
                      , cardano-ledger-core >= 1.12
                      , cardano-ledger-shelley
-                     , cardano-ledger-conway >= 1.18.1
+                     , cardano-ledger-conway:{cardano-ledger-conway, testlib} >= 1.18.1
                      , cardano-protocol-tpraos
                      , cardano-slotting
                      , cassava
@@ -70,6 +70,8 @@ library
                      , ouroboros-network-api
                      , io-classes
                      , nothunks
+                     , prettyprinter
+                     , prettyprinter-ansi-terminal
                      , resource-registry
                      , rio
                      , serialise

@@ -25,11 +25,12 @@ import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary (EncCBOR, ToCBOR)
 import Cardano.Ledger.Coin
 import Cardano.Ledger.Conway.Governance
+import Cardano.Ledger.Conway.Rules
 import qualified Cardano.Ledger.Conway.Rules as Conway
 import Cardano.Ledger.Credential
 import Cardano.Ledger.MemoBytes
 import Cardano.Ledger.Plutus.Language
-import Cardano.Ledger.Shelley.LedgerState (EraCertState, NewEpochState)
+import Cardano.Ledger.Shelley.LedgerState
 import Cardano.Ledger.Shelley.Rewards (aggregateRewards)
 import qualified Cardano.Ledger.Shelley.Rules as Shelley
 import Cardano.Ledger.Shelley.Scripts
@@ -43,6 +44,9 @@ import qualified Data.ByteString.Short as SBS
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust)
 import qualified Data.Set as Set
+import Prettyprinter (Doc, hsep, viaShow, defaultLayoutOptions, layoutPretty)
+import Prettyprinter.Render.Terminal (AnsiStyle, renderStrict)
+import Test.Cardano.Ledger.Conway.TreeDiff (tableDoc)
 
 data AppLanguage
   = AppNativeLanguage
@@ -130,8 +134,8 @@ class
   getRewardsFromEvents _ _ = Map.empty
 
   -- This function forces the DRep pulser
-  reportRatification :: NewEpochState era -> Maybe (NewEpochState era, Text)
-  reportRatification = const Nothing
+  reportRatification :: [GovActionId] -> NewEpochState era -> Maybe (NewEpochState era, Text)
+  reportRatification _ = const Nothing
 
 instance EraApp ShelleyEra where
   appScript = AppMultiSig
@@ -167,43 +171,81 @@ instance EraApp ConwayEra where
   getRewardsFromEvents _ (Shelley.TickNewEpochEvent (Conway.TotalRewardEvent _ rs)) =
     aggregateRewards (ProtVer (eraProtVerLow @ConwayEra) 0) rs
   getRewardsFromEvents _ _ = Map.empty
-  reportRatification nes =
-    case nes ^. newEpochStateDRepPulsingStateL of
-      DRPulsing (DRepPulser{..}) ->
-        let
-          !snap =
-            PulsingSnapshot
-              dpProposals
-              finalDRepDistr
-              dpDRepState
-              (Map.map individualTotalPoolStake $ unPoolDistr finalStakePoolDistr)
-          !leftOver = Map.drop dpIndex $ umElems dpUMap
-          (finalDRepDistr, finalStakePoolDistr) =
-            computeDRepDistr dpInstantStake dpDRepState dpProposalDeposits dpStakePoolDistr dpDRepDistr leftOver
-          !ratifyEnv =
-            RatifyEnv
-              { reInstantStake = dpInstantStake
-              , reStakePoolDistr = finalStakePoolDistr
-              , reDRepDistr = finalDRepDistr
-              , reDRepState = dpDRepState
-              , reCurrentEpoch = dpCurrentEpoch
-              , reCommitteeState = dpCommitteeState
-              , reDelegatees = dRepMap dpUMap
-              , rePoolParams = dpPoolParams
-              }
-          !ratifySig = RatifySignal dpProposals
-          !ratifyState =
-            RatifyState
-              { rsEnactState = dpEnactState
-              , rsEnacted = mempty
-              , rsExpired = mempty
-              , rsDelayed = False
-              }
-          !ratifyState' = runConwayRatify dpGlobals ratifyEnv ratifyState ratifySig
-          report = ""
-         in
-          Just (nes & newEpochStateDRepPulsingStateL .~ DRComplete snap ratifyState', report)
-      DRComplete{} -> Nothing
+  reportRatification gaIds nes =
+    let govActions = mapMaybe lookupGovAction gaIds
+        lookupGovAction gaId =
+          proposalsLookupId gaId $ nes ^. newEpochStateGovStateL . proposalsGovStateL
+        pv = nes ^. nesEsL . curPParamsEpochStateL . ppProtocolVersionL
+     in case nes ^. newEpochStateDRepPulsingStateL of
+          DRPulsing (DRepPulser{..})
+            | not (null govActions) ->
+                let
+                  !snap =
+                    PulsingSnapshot
+                      dpProposals
+                      finalDRepDistr
+                      dpDRepState
+                      (Map.map individualTotalPoolStake $ unPoolDistr finalStakePoolDistr)
+                  !leftOver = Map.drop dpIndex $ umElems dpUMap
+                  (finalDRepDistr, finalStakePoolDistr) =
+                    computeDRepDistr dpInstantStake dpDRepState dpProposalDeposits dpStakePoolDistr dpDRepDistr leftOver
+                  !ratifyEnv =
+                    RatifyEnv
+                      { reInstantStake = dpInstantStake
+                      , reStakePoolDistr = finalStakePoolDistr
+                      , reDRepDistr = finalDRepDistr
+                      , reDRepState = dpDRepState
+                      , reCurrentEpoch = dpCurrentEpoch
+                      , reCommitteeState = dpCommitteeState
+                      , reDelegatees = dRepMap dpUMap
+                      , rePoolParams = dpPoolParams
+                      }
+                  !ratifySig = RatifySignal dpProposals
+                  !ratifyState =
+                    RatifyState
+                      { rsEnactState = dpEnactState
+                      , rsEnacted = mempty
+                      , rsExpired = mempty
+                      , rsDelayed = False
+                      }
+                  !ratifyState' = runConwayRatify dpGlobals ratifyEnv ratifyState ratifySig
+                  -- This will be the epoch number for the previous epoch, which is what we want.
+                  -- It is because this, presumably, can only be triggered upon the very first TICK
+                  -- in the epoch.
+                  eNo = nes ^. nesELL
+                  committee = nes ^. nesEsL . epochStateGovStateL . committeeGovStateL
+                  members = foldMap committeeMembers committee
+                  dRepRatio gas =
+                    dRepAcceptedRatio
+                      ratifyEnv
+                      (gas ^. gasDRepVotesL)
+                      (gasAction gas)
+                  committeeRatio gas =
+                    committeeAcceptedRatio
+                      members
+                      (gasCommitteeVotes gas)
+                      (reCommitteeState ratifyEnv)
+                      eNo
+                  spoRatio gas = spoAcceptedRatio ratifyEnv gas pv
+                  reportGovAction gas =
+                    tableDoc
+                      (Just "ACCEPTED RATIOS")
+                      [ ("DRep accepted ratio:", viaShow (dRepRatio gas))
+                      , ("Committee accepted ratio:", viaShow (committeeRatio gas))
+                      , ("SPO accepted ratio:", viaShow (spoRatio gas))
+                      ]
+                  report =
+                    ansiDocToText $
+                      mconcat $
+                        [ "============== " <> viaShow eNo <> " =============="
+                        , hsep (map reportGovAction govActions)
+                        ]
+                 in
+                  Just (nes & newEpochStateDRepPulsingStateL .~ DRComplete snap ratifyState', report)
+          _ -> Nothing
+
+ansiDocToText :: Doc AnsiStyle -> Text
+ansiDocToText = renderStrict . layoutPretty defaultLayoutOptions
 
 appTimelockScript ::
   (EraScript era, NativeScript era ~ Timelock era) => Script era -> Maybe AppScript

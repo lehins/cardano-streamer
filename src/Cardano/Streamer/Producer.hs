@@ -326,7 +326,7 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
         modifyTickedNewEpochState
           (\_ cvs -> (cvs, Nothing))
           ( \_ nes ->
-              case reportRatification nes of
+              case reportRatification [] nes of
                 Nothing -> (nes, Nothing)
                 Just (nes', report) -> (nes', Just report)
           )
