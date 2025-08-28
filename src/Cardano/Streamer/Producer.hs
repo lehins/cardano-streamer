@@ -322,13 +322,23 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
   let ledgerCfg = ExtLedgerCfg . pInfoConfig $ dsAppProtocolInfo app
       tickEvents =
         if null (dsAppRewardsHandles app) then OmitLedgerEvents else ComputeLedgerEvents
-      lrTick = applyChainTickLedgerResult tickEvents ledgerCfg slotNo prevLedger
-      lrTickResult = lrResult lrTick
+      modifyTickState =
+        modifyTickedNewEpochState
+          (\_ cvs -> (cvs, Nothing))
+          ( \_ nes ->
+              case reportRatification nes of
+                Nothing -> (nes, Nothing)
+                Just (nes', report) -> (nes', Just report)
+          )
+      lrTick0 = applyChainTickLedgerResult tickEvents ledgerCfg slotNo prevLedger
+      (lrTickResult, mReport) = modifyTickState $ lrResult lrTick0
+      lrTick = lrTick0{lrResult = lrTickResult}
       reportException (exc :: SomeException) =
         when (isSyncException exc) $ do
           logStickyStatus
           logError $ "Received an exception: " <> displayShow exc
           reportValidationError exc slotNo block prevLedger
+  forM_ mReport (logInfo . display)
   (blocksToWriteSlotSet, blocksToWriteBlockHashSet) <- readIORef (dsAppWriteBlocks app)
   (extLedgerState, b) <-
     flip withException reportException $ do

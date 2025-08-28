@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -6,6 +7,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
@@ -22,6 +24,7 @@ import Cardano.Ledger.Babbage.Core
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary (EncCBOR, ToCBOR)
 import Cardano.Ledger.Coin
+import Cardano.Ledger.Conway.Governance
 import qualified Cardano.Ledger.Conway.Rules as Conway
 import Cardano.Ledger.Credential
 import Cardano.Ledger.MemoBytes
@@ -31,6 +34,7 @@ import Cardano.Ledger.Shelley.Rewards (aggregateRewards)
 import qualified Cardano.Ledger.Shelley.Rules as Shelley
 import Cardano.Ledger.Shelley.Scripts
 import Cardano.Ledger.State
+import Cardano.Ledger.UMap
 import Cardano.Streamer.Common
 import Control.State.Transition.Extended
 import Data.Aeson
@@ -125,6 +129,10 @@ class
     aggregateRewards (ProtVer (eraProtVerLow @era) 0) rs
   getRewardsFromEvents _ _ = Map.empty
 
+  -- This function forces the DRep pulser
+  reportRatification :: NewEpochState era -> Maybe (NewEpochState era, Text)
+  reportRatification = const Nothing
+
 instance EraApp ShelleyEra where
   appScript = AppMultiSig
   utxoTx tx = txouts (tx ^. bodyTxL)
@@ -159,6 +167,43 @@ instance EraApp ConwayEra where
   getRewardsFromEvents _ (Shelley.TickNewEpochEvent (Conway.TotalRewardEvent _ rs)) =
     aggregateRewards (ProtVer (eraProtVerLow @ConwayEra) 0) rs
   getRewardsFromEvents _ _ = Map.empty
+  reportRatification nes =
+    case nes ^. newEpochStateDRepPulsingStateL of
+      DRPulsing (DRepPulser{..}) ->
+        let
+          !snap =
+            PulsingSnapshot
+              dpProposals
+              finalDRepDistr
+              dpDRepState
+              (Map.map individualTotalPoolStake $ unPoolDistr finalStakePoolDistr)
+          !leftOver = Map.drop dpIndex $ umElems dpUMap
+          (finalDRepDistr, finalStakePoolDistr) =
+            computeDRepDistr dpInstantStake dpDRepState dpProposalDeposits dpStakePoolDistr dpDRepDistr leftOver
+          !ratifyEnv =
+            RatifyEnv
+              { reInstantStake = dpInstantStake
+              , reStakePoolDistr = finalStakePoolDistr
+              , reDRepDistr = finalDRepDistr
+              , reDRepState = dpDRepState
+              , reCurrentEpoch = dpCurrentEpoch
+              , reCommitteeState = dpCommitteeState
+              , reDelegatees = dRepMap dpUMap
+              , rePoolParams = dpPoolParams
+              }
+          !ratifySig = RatifySignal dpProposals
+          !ratifyState =
+            RatifyState
+              { rsEnactState = dpEnactState
+              , rsEnacted = mempty
+              , rsExpired = mempty
+              , rsDelayed = False
+              }
+          !ratifyState' = runConwayRatify dpGlobals ratifyEnv ratifyState ratifySig
+          report = ""
+         in
+          Just (nes & newEpochStateDRepPulsingStateL .~ DRComplete snap ratifyState', report)
+      DRComplete{} -> Nothing
 
 appTimelockScript ::
   (EraScript era, NativeScript era ~ Timelock era) => Script era -> Maybe AppScript

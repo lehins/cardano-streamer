@@ -9,8 +9,10 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Cardano.Streamer.LedgerState (
   readNewEpochState,
@@ -19,6 +21,7 @@ module Cardano.Streamer.LedgerState (
   applyNewEpochState,
   applyTickedNewEpochStateWithBlock,
   applyTickedNewEpochStateWithTxs,
+  modifyTickedNewEpochState,
   tickedExtLedgerStateEpochNo,
   blockLanguageRefScriptsStats,
   lookupRewards,
@@ -366,6 +369,57 @@ applyTickedNewEpochState fByronBased fShelleyBased tickedExtLedgerState =
     TickedLedgerStateAlonzo ti ls -> fShelleyBased ti (tickedShelleyLedgerState ls)
     TickedLedgerStateBabbage ti ls -> fShelleyBased ti (tickedShelleyLedgerState ls)
     TickedLedgerStateConway ti ls -> fShelleyBased ti (tickedShelleyLedgerState ls)
+
+modifyTickedNewEpochState ::
+  forall a c.
+  (TransitionInfo -> ChainValidationState -> (ChainValidationState, a)) ->
+  (forall era. EraApp era => TransitionInfo -> NewEpochState era -> (NewEpochState era, a)) ->
+  Ticked (ExtLedgerState (CardanoBlock c)) ->
+  (Ticked (ExtLedgerState (CardanoBlock c)), a)
+modifyTickedNewEpochState fByronBased fShelleyBased tickedExtLedgerState =
+  case tickedLedgerState tickedExtLedgerState of
+    TickedHardForkLedgerState ti (State.HardForkState tls) ->
+      let
+        modifyCurrentShelleyState ::
+          EraApp era =>
+          Current (Ticked :.: LedgerState) (ShelleyBlock proto era) ->
+          (Current (Ticked :.: LedgerState) (ShelleyBlock proto era), a)
+        modifyCurrentShelleyState cst =
+          let State.Current{currentState = Comp st} = cst
+              (nes, a) = fShelleyBased ti (tickedShelleyLedgerState st)
+              cst' = cst{currentState = Comp $ st{tickedShelleyLedgerState = nes}}
+           in (cst', a)
+        tels =
+          tickedExtLedgerState
+            { tickedLedgerState = TickedHardForkLedgerState ti $ State.HardForkState tls'
+            }
+        (tls', res) =
+          case tls of
+            TZ cst ->
+              let State.Current{currentState = Comp st} = cst
+                  (cvs, a) = fByronBased ti (tickedByronLedgerState st)
+                  cst' = cst{currentState = Comp $ st{tickedByronLedgerState = cvs}}
+               in (TZ cst', a)
+            TS e0 (TZ cst) ->
+              let (cst', a) = modifyCurrentShelleyState cst
+               in (TS e0 (TZ cst'), a)
+            TS e0 (TS e1 (TZ cst)) ->
+              let (cst', a) = modifyCurrentShelleyState cst
+               in (TS e0 (TS e1 (TZ cst')), a)
+            TS e0 (TS e1 (TS e2 (TZ cst))) ->
+              let (cst', a) = modifyCurrentShelleyState cst
+               in (TS e0 (TS e1 (TS e2 (TZ cst'))), a)
+            TS e0 (TS e1 (TS e2 (TS e3 (TZ cst)))) ->
+              let (cst', a) = modifyCurrentShelleyState cst
+               in (TS e0 (TS e1 (TS e2 (TS e3 (TZ cst')))), a)
+            TS e0 (TS e1 (TS e2 (TS e3 (TS e4 (TZ cst))))) ->
+              let (cst', a) = modifyCurrentShelleyState cst
+               in (TS e0 (TS e1 (TS e2 (TS e3 (TS e4 (TZ cst'))))), a)
+            TS e0 (TS e1 (TS e2 (TS e3 (TS e4 (TS e5 (TZ cst)))))) ->
+              let (cst', a) = modifyCurrentShelleyState cst
+               in (TS e0 (TS e1 (TS e2 (TS e3 (TS e4 (TS e5 (TZ cst')))))), a)
+       in
+        (tels, res)
 
 applyTickedNonByronNewEpochState ::
   (forall era. EraApp era => TransitionInfo -> NewEpochState era -> a) ->
