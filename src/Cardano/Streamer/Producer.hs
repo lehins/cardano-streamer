@@ -11,13 +11,16 @@
 
 module Cardano.Streamer.Producer where
 
-import Cardano.Crypto.Hash.Class (hashToTextAsHex)
+import Cardano.Crypto.Hash.Class (hashFromTextAsHex, hashToTextAsHex)
 import Cardano.Ledger.Address
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary.Plain (decodeFullDecoder)
 import Cardano.Ledger.Coin
+import Cardano.Ledger.Conway.Governance
 import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
+import Cardano.Ledger.Hashes (unsafeMakeSafeHash)
+import Cardano.Ledger.TxIn
 import Cardano.Slotting.EpochInfo.API (epochInfoSlotToUTCTime)
 import Cardano.Streamer.Benchmark
 import Cardano.Streamer.BlockInfo
@@ -36,6 +39,7 @@ import Data.Char (toLower)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Merge.Strict as Map
 import qualified Data.Map.Strict as Map
+import Data.Maybe
 import Ouroboros.Consensus.Block
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Config (configCodec)
@@ -322,11 +326,14 @@ advanceBlockGranular inspectTickState inspectBlockState !prevLedger !bwi = do
   let ledgerCfg = ExtLedgerCfg . pInfoConfig $ dsAppProtocolInfo app
       tickEvents =
         if null (dsAppRewardsHandles app) then OmitLedgerEvents else ComputeLedgerEvents
+      gaIds =
+        [ mkGovActionId "47a0e7a4f9383b1afc2192b23b41824d65ac978d7741aca61fc1fa16833d1111" 0
+        ]
       modifyTickState =
         modifyTickedNewEpochState
           (\_ cvs -> (cvs, Nothing))
           ( \_ nes ->
-              case reportRatification [] nes of
+              case reportRatification gaIds nes of
                 Nothing -> (nes, Nothing)
                 Just (nes', report) -> (nes', Just report)
           )
@@ -795,3 +802,9 @@ runApp Opts{..} = do
 -- total <- runRIO (app{dsAppOutDir = mOutDir}) $ countTxOuts initLedger
 -- logInfo $ "Total TxOuts: " <> displayShow total
 -- runRIO (app{dsAppOutDir = mOutDir}) $ revalidateWriteNewEpochState initLedger
+
+mkGovActionId :: Text -> Word16 -> GovActionId
+mkGovActionId hashHexTxt ix =
+  GovActionId
+    (TxId $ unsafeMakeSafeHash $ fromJust $ hashFromTextAsHex hashHexTxt)
+    (GovActionIx ix)

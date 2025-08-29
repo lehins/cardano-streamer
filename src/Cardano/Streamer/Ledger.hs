@@ -44,7 +44,7 @@ import qualified Data.ByteString.Short as SBS
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust)
 import qualified Data.Set as Set
-import Prettyprinter (Doc, hsep, viaShow, defaultLayoutOptions, layoutPretty)
+import Prettyprinter (Doc, defaultLayoutOptions, hsep, layoutPretty, viaShow)
 import Prettyprinter.Render.Terminal (AnsiStyle, renderStrict)
 import Test.Cardano.Ledger.Conway.TreeDiff (tableDoc)
 
@@ -227,18 +227,57 @@ instance EraApp ConwayEra where
                       (reCommitteeState ratifyEnv)
                       eNo
                   spoRatio gas = spoAcceptedRatio ratifyEnv gas pv
+                  isDRepAccepted = dRepAccepted ratifyEnv ratifyState
+                  isCommitteeAccepted = committeeAccepted ratifyEnv ratifyState
+                  isSPOAccepted = spoAccepted ratifyEnv ratifyState
                   reportGovAction gas =
                     tableDoc
                       (Just "ACCEPTED RATIOS")
-                      [ ("DRep accepted ratio:", viaShow (dRepRatio gas))
-                      , ("Committee accepted ratio:", viaShow (committeeRatio gas))
-                      , ("SPO accepted ratio:", viaShow (spoRatio gas))
+                      [
+                        ( "DRep accepted ratio: " <> show (isDRepAccepted gas)
+                        , viaShow (dRepRatio gas)
+                        )
+                      ,
+                        ( "Committee accepted ratio: " <> show (isCommitteeAccepted gas)
+                        , viaShow (committeeRatio gas)
+                        )
+                      ,
+                        ( "SPO accepted ratio: " <> show (isSPOAccepted gas)
+                        , viaShow (spoRatio gas)
+                        )
+                      ,
+                        ( "prevActionAsExpected:"
+                        , viaShow
+                            ( prevActionAsExpected
+                                gas
+                                (ensPrevGovActionIds (rsEnactState ratifyState))
+                            )
+                        )
+                      ,
+                        ( "validCommitteeTerm"
+                        , viaShow
+                            ( validCommitteeTerm
+                                (gasAction gas)
+                                (ensCurPParams (rsEnactState ratifyState))
+                                (reCurrentEpoch ratifyEnv)
+                            )
+                        )
+                      , ("NotDelayed", viaShow (not (rsDelayed ratifyState)))
+                      ,
+                        ( "withdrawalCanWithdraw"
+                        , viaShow
+                            ( withdrawalCanWithdraw
+                                (gasAction gas)
+                                (ensTreasury (rsEnactState ratifyState))
+                            )
+                        )
                       ]
                   report =
                     ansiDocToText $
-                      mconcat $
+                      hsep
                         [ "============== " <> viaShow eNo <> " =============="
                         , hsep (map reportGovAction govActions)
+                        , viaShow ratifyState'
                         ]
                  in
                   Just (nes & newEpochStateDRepPulsingStateL .~ DRComplete snap ratifyState', report)
