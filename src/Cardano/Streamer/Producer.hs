@@ -488,11 +488,11 @@ instance Display RewardsPerEpoch where
       , display (unEpochNo rewardsEpochNo)
       ]
         ++ [ "\n    "
-            <> displayShow cred
-            <> ": "
-            <> display rew
-            <> "  "
-            <> display wdrl
+               <> displayShow cred
+               <> ": "
+               <> display rew
+               <> "  "
+               <> display wdrl
            | (cred, (Coin rew, Coin wdrl)) <- Map.toList rewardsAndWithdrawals
            ]
     where
@@ -586,6 +586,85 @@ replayChain ::
   RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (ExtLedgerState (CardanoBlock StandardCrypto))
 replayChain initLedgerState = do
   runConduit $ foldBlocksWithState GetBlock initLedgerState advanceBlock_
+
+replayChainWithReport ::
+  e ->
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  ( e ->
+    ExtLedgerState (CardanoBlock StandardCrypto) ->
+    -- \^ Starting ledger state
+    SlotNo ->
+    -- \^ New slot number
+    Ticked (ExtLedgerState (CardanoBlock StandardCrypto)) ->
+    -- \^ Ticked ledger state
+    BlockWithInfo (CardanoBlock StandardCrypto) ->
+    -- \^ Block applied
+    ExtLedgerState (CardanoBlock StandardCrypto) ->
+    -- \^ New ledger state
+    RIO (DbStreamerApp (CardanoBlock StandardCrypto)) e
+  ) ->
+  RIO (DbStreamerApp (CardanoBlock StandardCrypto)) e
+replayChainWithReport initAccState initExtLedgerState action =
+  snd
+    <$> runConduit
+      ( sourceBlocksWithInfo
+          initAccState
+          initExtLedgerState
+          ( \accState extLedgerState slotNo tickExtLedgerState blockWithInfo nextExtLedgerState -> do
+              (,()) <$> action accState extLedgerState slotNo tickExtLedgerState blockWithInfo nextExtLedgerState
+          )
+          `fuseUpstream` sinkNull
+      )
+
+sourceBlocksWithInfo ::
+  -- | Initial accumulator
+  e ->
+  -- | Initial ledger state
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  ( e ->
+    -- \^ Accumulator
+    ExtLedgerState (CardanoBlock StandardCrypto) ->
+    -- \^ Starting ledger state
+    SlotNo ->
+    -- \^ New slot number
+    Ticked (ExtLedgerState (CardanoBlock StandardCrypto)) ->
+    -- \^ Ticked ledger state
+    BlockWithInfo (CardanoBlock StandardCrypto) ->
+    -- \^ Block applied
+    ExtLedgerState (CardanoBlock StandardCrypto) ->
+    -- \^ New ledger state
+    RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (e, a)
+  ) ->
+  ConduitT
+    c
+    a
+    (RIO (DbStreamerApp (CardanoBlock StandardCrypto)))
+    (ExtLedgerState (CardanoBlock StandardCrypto), e)
+sourceBlocksWithInfo initAccState initExtLedgerState action = do
+  sourceBlocksWithAccState
+    GetBlock
+    initExtLedgerState
+    initAccState
+    ( \extLedgerState accState blockWithInfo -> do
+        (nextExtLedgerState, (newAcc, newYield)) <-
+          advanceBlockGranular
+            (\_ -> pure)
+            ( \lrTick getExtLedgerState slotNo -> do
+                nextExtLedgerState <- getExtLedgerState
+                res <-
+                  action
+                    accState
+                    extLedgerState
+                    slotNo
+                    (lrResult lrTick)
+                    blockWithInfo
+                    nextExtLedgerState
+                pure (nextExtLedgerState, res)
+            )
+            extLedgerState
+            blockWithInfo
+        pure (nextExtLedgerState, newAcc, newYield)
+    )
 
 exportRewards ::
   Set (Credential 'Staking) ->
