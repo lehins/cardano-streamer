@@ -823,7 +823,12 @@ runApp Opts{..} = do
             logInfo $ "Starting to " <> display oCommand
             writeStreamerHeader
             case oCommand of
-              Replay -> void $ replayChain initLedger
+              -- Replay -> void $ replayChain initLedger
+              Replay -> do
+                finalData <- replayChainWithReport initLedger mempty $
+                  \accState extLedgerState slotNo tickExtLedgerState blockWithInfo nextExtLedgerState -> do
+                    
+                writeToFileAsCSV finalData
               Benchmark -> void $ replayBenchmarkReport initLedger
               Stats -> void $ runConduit $ calcEpochStats initLedger
               ComputeRewards rewardAccounts -> do

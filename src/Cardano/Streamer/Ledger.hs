@@ -271,3 +271,46 @@ outScriptTxBody = map appScript . appOutScriptsTxBody
 --   case appScript script of
 --     AppPlutusScript plutus -> Just $ PlutusWithLanguage plutus
 --     _ -> Nothing
+
+data LostAda = LostAda
+  { lostAdaAccounts :: Map (Credential 'Stalking) LostAdaAccount
+  }
+instance Semigroup LostAda where
+  la1 <> la2 =
+    LostAda
+      { lostAdaAccounts = lostAdaAccounts la1 <> lostAdaAccounts la2
+      }
+
+instance Monoid where
+  mempty = LostAda mempty
+
+data LostAdaAccount = LostAdaAccount
+  { lostAdaAccount :: !(Credential 'Stalking)
+  , lostAdaRegisteredAtSlotNo :: !SlotNo
+  -- ^ Slot number when an account was registered
+  , lostAdaStakePoolDelegation :: !(Maybe (KeyHash 'StakePool))
+  , lostAdaDRepDelegation :: !(Maybe (Credential 'DRep))
+  , lostAdaRegisteredAtTimestamp :: !UTCTime
+  -- ^ Timestamp derived from `lostAdaRegisteredAtSlotNo`
+  , lostAdaLastDelegationSlotNo :: !SlotNo
+  -- ^ Last slot number when a witness was required for the purpose of delegation
+  , lostAdaLastDelegationTimestamp :: !UTCTime
+  -- ^ Timestamp derived from `lostAdaLastDelegationSlotNo`
+  , lostAdaLastWithdrawalSlotNo :: !SlotNo
+  -- ^ Last slot number when a witness was required for the purpose of withdrawal
+  , lostAdaLastWithdrawalTimestamp :: !UTCTime
+  -- ^ Timestamp derived from `lostAdaLastWithdrawalSlotNo`
+  , lostAdaLastAddressOwnerActivitySlotNo :: !SlotNo
+  -- ^ Last slot number when a transfer was made to an address associated with a reward account:
+  -- * spending an output from an address with staking credential
+  -- * using an address for stake pool rewards
+  , lostAdaLastAddressOwnerActivityTimestamp :: !UTCTime
+  -- ^ Timestamp derived from `lostAdaLastActivitySlotNo`
+  , lostAdaLastAddressActivitySlotNo :: !SlotNo
+  -- ^ Last slot number when a transfer was made to an address associated with a reward account
+  -- * sending to an address with staking credential
+  , lostAdaLastAddressActivityTimestamp :: !UTCTime
+  -- ^ Timestamp derived from `lostAdaLastActivitySlotNo`
+  , lostAdaCurrentStake :: !Coin
+  , lostAdaCurrentRewards :: !Coin
+  }
