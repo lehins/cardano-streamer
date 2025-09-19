@@ -33,6 +33,7 @@ import Control.Monad.Trans.Except
 import Control.ResourceRegistry (withRegistry)
 import Control.State.Transition.Extended
 import Data.Char (toLower)
+import Data.Csv (encodeDefaultOrderedByName)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Merge.Strict as Map
 import qualified Data.Map.Strict as Map
@@ -488,11 +489,11 @@ instance Display RewardsPerEpoch where
       , display (unEpochNo rewardsEpochNo)
       ]
         ++ [ "\n    "
-               <> displayShow cred
-               <> ": "
-               <> display rew
-               <> "  "
-               <> display wdrl
+            <> displayShow cred
+            <> ": "
+            <> display rew
+            <> "  "
+            <> display wdrl
            | (cred, (Coin rew, Coin wdrl)) <- Map.toList rewardsAndWithdrawals
            ]
     where
@@ -603,18 +604,16 @@ replayChainWithReport ::
     -- \^ New ledger state
     RIO (DbStreamerApp (CardanoBlock StandardCrypto)) e
   ) ->
-  RIO (DbStreamerApp (CardanoBlock StandardCrypto)) e
+  RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (ExtLedgerState (CardanoBlock StandardCrypto), e)
 replayChainWithReport initAccState initExtLedgerState action =
-  snd
-    <$> runConduit
-      ( sourceBlocksWithInfo
-          initAccState
-          initExtLedgerState
-          ( \accState extLedgerState slotNo tickExtLedgerState blockWithInfo nextExtLedgerState -> do
-              (,()) <$> action accState extLedgerState slotNo tickExtLedgerState blockWithInfo nextExtLedgerState
-          )
-          `fuseUpstream` sinkNull
+  runConduit $
+    sourceBlocksWithInfo
+      initAccState
+      initExtLedgerState
+      ( \accState extLedgerState slotNo tickExtLedgerState blockWithInfo nextExtLedgerState -> do
+          (,()) <$> action accState extLedgerState slotNo tickExtLedgerState blockWithInfo nextExtLedgerState
       )
+      `fuseUpstream` sinkNull
 
 sourceBlocksWithInfo ::
   -- | Initial accumulator
@@ -825,10 +824,24 @@ runApp Opts{..} = do
             case oCommand of
               -- Replay -> void $ replayChain initLedger
               Replay -> do
-                finalData <- replayChainWithReport initLedger mempty $
-                  \accState extLedgerState slotNo tickExtLedgerState blockWithInfo nextExtLedgerState -> do
-                    
-                writeToFileAsCSV finalData
+                (extLedgerState, (lastSlotNo, finalData)) <-
+                  replayChainWithReport (SlotNo 0, mempty) initLedger $
+                    \(_, !accState) _ slotNo tickedExtLedgerState blockWithInfo _ ->
+                      pure $
+                        ( slotNo
+                        , applyTickedNewEpochStateWithTxs
+                            (\_ _ -> mempty)
+                            (accLostAdaTxs slotNo accState)
+                            tickedExtLedgerState
+                            (biBlockComponent blockWithInfo)
+                        )
+                let finalData' = Map.elems (laAccounts finalData) -- TODO update final stake and rewards
+                mOutDir <- dsAppOutDir <$> ask
+                forM_ mOutDir $ \outDir -> do
+                  let fileName = "lostAda-" <> show lastSlotNo <.> "csv"
+                  writeFileBinary (outDir </> fileName) $
+                    toStrictBytes $
+                      encodeDefaultOrderedByName finalData'
               Benchmark -> void $ replayBenchmarkReport initLedger
               Stats -> void $ runConduit $ calcEpochStats initLedger
               ComputeRewards rewardAccounts -> do

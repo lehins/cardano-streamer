@@ -1,29 +1,37 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableSuperClasses #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module Cardano.Streamer.Ledger where
 
+import Cardano.Crypto.Hash (hashToTextAsHex)
+import Cardano.Ledger.Address
 import Cardano.Ledger.Allegra.Scripts
 import Cardano.Ledger.Alonzo.Scripts
 import Cardano.Ledger.Alonzo.Tx
 import Cardano.Ledger.Api.Era
 import Cardano.Ledger.Babbage.Collateral (collOuts)
-import Cardano.Ledger.Babbage.Core
 import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary (EncCBOR, ToCBOR)
 import Cardano.Ledger.Coin
+import Cardano.Ledger.Conway.Core
 import qualified Cardano.Ledger.Conway.Rules as Conway
+import Cardano.Ledger.Conway.TxCert
 import Cardano.Ledger.Credential
+import Cardano.Ledger.DRep
 import Cardano.Ledger.MemoBytes
 import Cardano.Ledger.Plutus.Language
 import Cardano.Ledger.Shelley.LedgerState (EraCertState, NewEpochState)
@@ -36,6 +44,8 @@ import Control.State.Transition.Extended
 import Data.Aeson
 import Data.Aeson.Types (toJSONKeyText)
 import qualified Data.ByteString.Short as SBS
+import Data.Csv
+import qualified Data.Foldable as F
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust)
 import qualified Data.Set as Set
@@ -125,21 +135,80 @@ class
     aggregateRewards (ProtVer (eraProtVerLow @era) 0) rs
   getRewardsFromEvents _ _ = Map.empty
 
+  getCreatedOutputsTx :: Tx era -> UTxO era
+
+  updateCertificates :: SlotNo -> LostAda -> TxCert era -> LostAda
+
+shelleyUpdateCertitifcates :: ShelleyEraTxCert era => SlotNo -> LostAda -> TxCert era -> LostAda
+shelleyUpdateCertitifcates slotNo curLostAda = \case
+  RegTxCert cred ->
+    let updateSlotNo _ oldLa _newLa =
+          oldLa{laRegisteredAtSlotNo = SJust slotNo}
+        newLostAda =
+          LostAdaAccount
+            { laAccount = cred
+            , laRegisteredAtSlotNo = SJust slotNo
+            , laUnregisteredAtSlotNo = SNothing
+            , laStakePoolDelegation = SNothing
+            , laDRepDelegation = SNothing
+            , laLastDelegationSlotNo = SNothing
+            , laLastWithdrawalSlotNo = SNothing
+            , laLastAddressOwnerActivitySlotNo = SNothing
+            , laLastAddressActivitySlotNo = SNothing
+            , laCurrentStake = mempty
+            , laCurrentRewards = mempty
+            }
+     in curLostAda
+          { laAccounts =
+              snd $
+                Map.insertLookupWithKey updateSlotNo cred newLostAda (laAccounts curLostAda)
+          }
+  UnRegTxCert cred ->
+    let updateSlotNo la =
+          la
+            { laUnregisteredAtSlotNo = SJust slotNo
+            , laStakePoolDelegation = SNothing
+            }
+     in curLostAda
+          { laAccounts = Map.adjust updateSlotNo cred (laAccounts curLostAda)
+          }
+  DelegStakeTxCert cred poolId ->
+    let updateSlotNo la =
+          la
+            { laLastDelegationSlotNo = SJust slotNo
+            , laStakePoolDelegation = SJust poolId
+            }
+     in curLostAda
+          { laAccounts = Map.adjust updateSlotNo cred (laAccounts curLostAda)
+          }
+  _ -> curLostAda
+
 instance EraApp ShelleyEra where
   appScript = AppMultiSig
   utxoTx tx = txouts (tx ^. bodyTxL)
+  getCreatedOutputsTx tx = txouts (tx ^. bodyTxL)
+  updateCertificates = shelleyUpdateCertitifcates
 
 instance EraApp AllegraEra where
   appScript = AppTimelock
   utxoTx tx = txouts (tx ^. bodyTxL)
+  getCreatedOutputsTx tx = txouts (tx ^. bodyTxL)
+  updateCertificates = shelleyUpdateCertitifcates
 
 instance EraApp MaryEra where
   appScript = AppTimelock
   utxoTx tx = txouts (tx ^. bodyTxL)
+  getCreatedOutputsTx tx = txouts (tx ^. bodyTxL)
+  updateCertificates = shelleyUpdateCertitifcates
 
 instance EraApp AlonzoEra where
   appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
   utxoTx tx = txouts (tx ^. bodyTxL)
+  getCreatedOutputsTx tx =
+    case tx ^. isValidTxL of
+      IsValid True -> txouts (tx ^. bodyTxL)
+      IsValid False -> mempty
+  updateCertificates = shelleyUpdateCertitifcates
 
 instance EraApp BabbageEra where
   appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
@@ -148,6 +217,11 @@ instance EraApp BabbageEra where
   utxoTx tx
     | tx ^. isValidTxL == IsValid True = txouts (tx ^. bodyTxL)
     | otherwise = collOuts (tx ^. bodyTxL)
+  getCreatedOutputsTx tx =
+    case tx ^. isValidTxL of
+      IsValid True -> txouts (tx ^. bodyTxL)
+      IsValid False -> collOuts (tx ^. bodyTxL)
+  updateCertificates = shelleyUpdateCertitifcates
 
 instance EraApp ConwayEra where
   appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
@@ -159,6 +233,44 @@ instance EraApp ConwayEra where
   getRewardsFromEvents _ (Shelley.TickNewEpochEvent (Conway.TotalRewardEvent _ rs)) =
     aggregateRewards (ProtVer (eraProtVerLow @ConwayEra) 0) rs
   getRewardsFromEvents _ _ = Map.empty
+  getCreatedOutputsTx tx =
+    case tx ^. isValidTxL of
+      IsValid True -> txouts (tx ^. bodyTxL)
+      IsValid False -> collOuts (tx ^. bodyTxL)
+  updateCertificates = conwayUpdateCertificates
+
+conwayUpdateCertificates ::
+  forall era.
+  ConwayEraTxCert era =>
+  SlotNo ->
+  LostAda ->
+  TxCert era ->
+  LostAda
+conwayUpdateCertificates slotNo curLostAda = \case
+  RegDepositTxCert cred _ ->
+    shelleyUpdateCertitifcates @era slotNo curLostAda (RegTxCert cred)
+  UnRegDepositTxCert cred _ ->
+    shelleyUpdateCertitifcates @era slotNo curLostAda (UnRegTxCert cred)
+  DelegTxCert cred delegatee ->
+    case delegatee of
+      DelegStake poolId ->
+        shelleyUpdateCertitifcates @era slotNo curLostAda (DelegStakeTxCert cred poolId)
+      DelegVote dRep ->
+        let updateSlotNo la =
+              la
+                { laLastDelegationSlotNo = SJust slotNo
+                , laDRepDelegation = SJust dRep
+                }
+         in curLostAda
+              { laAccounts = Map.adjust updateSlotNo cred (laAccounts curLostAda)
+              }
+      DelegStakeVote poolId dRep ->
+        let lostAda = shelleyUpdateCertitifcates @era slotNo curLostAda (DelegStakeTxCert cred poolId)
+         in conwayUpdateCertificates @era slotNo lostAda (DelegTxCert cred (DelegVote dRep))
+  RegDepositDelegTxCert cred delegatee _ ->
+    let lostAda = shelleyUpdateCertitifcates @era slotNo curLostAda (RegTxCert cred)
+     in conwayUpdateCertificates @era slotNo lostAda (DelegTxCert cred delegatee)
+  cert -> shelleyUpdateCertitifcates @era slotNo curLostAda cert
 
 appTimelockScript ::
   (EraScript era, NativeScript era ~ Timelock era) => Script era -> Maybe AppScript
@@ -272,45 +384,119 @@ outScriptTxBody = map appScript . appOutScriptsTxBody
 --     AppPlutusScript plutus -> Just $ PlutusWithLanguage plutus
 --     _ -> Nothing
 
-data LostAda = LostAda
-  { lostAdaAccounts :: Map (Credential 'Stalking) LostAdaAccount
+newtype LostAda = LostAda
+  { laAccounts :: Map (Credential 'Staking) LostAdaAccount
   }
+  deriving (Show, Eq)
+
 instance Semigroup LostAda where
   la1 <> la2 =
     LostAda
-      { lostAdaAccounts = lostAdaAccounts la1 <> lostAdaAccounts la2
+      { laAccounts = laAccounts la1 <> laAccounts la2
       }
 
-instance Monoid where
+instance Monoid LostAda where
   mempty = LostAda mempty
 
 data LostAdaAccount = LostAdaAccount
-  { lostAdaAccount :: !(Credential 'Stalking)
-  , lostAdaRegisteredAtSlotNo :: !SlotNo
-  -- ^ Slot number when an account was registered
-  , lostAdaStakePoolDelegation :: !(Maybe (KeyHash 'StakePool))
-  , lostAdaDRepDelegation :: !(Maybe (Credential 'DRep))
-  , lostAdaRegisteredAtTimestamp :: !UTCTime
-  -- ^ Timestamp derived from `lostAdaRegisteredAtSlotNo`
-  , lostAdaLastDelegationSlotNo :: !SlotNo
-  -- ^ Last slot number when a witness was required for the purpose of delegation
-  , lostAdaLastDelegationTimestamp :: !UTCTime
-  -- ^ Timestamp derived from `lostAdaLastDelegationSlotNo`
-  , lostAdaLastWithdrawalSlotNo :: !SlotNo
+  { laAccount :: !(Credential 'Staking)
+  , laRegisteredAtSlotNo :: !(StrictMaybe SlotNo)
+  -- ^ Slot number when an account was registered last (it is possible to register and unregister an
+  -- account any number of times) It is a Maybe, because we also trac activity for unregistered
+  -- accounts, just in case they do get registered later.
+  , laUnregisteredAtSlotNo :: !(StrictMaybe SlotNo)
+  -- ^ Slot number when account was unregistered last
+  , laStakePoolDelegation :: !(StrictMaybe (KeyHash 'StakePool))
+  , laDRepDelegation :: !(StrictMaybe DRep)
+  , laLastDelegationSlotNo :: !(StrictMaybe SlotNo)
+  -- ^ Last slot number when a witness was required for the purpose of delegation either to a DRep
+  -- or to a StakePool
+  , laLastWithdrawalSlotNo :: !(StrictMaybe SlotNo)
   -- ^ Last slot number when a witness was required for the purpose of withdrawal
-  , lostAdaLastWithdrawalTimestamp :: !UTCTime
-  -- ^ Timestamp derived from `lostAdaLastWithdrawalSlotNo`
-  , lostAdaLastAddressOwnerActivitySlotNo :: !SlotNo
+  , laLastAddressOwnerActivitySlotNo :: !(StrictMaybe SlotNo)
   -- ^ Last slot number when a transfer was made to an address associated with a reward account:
   -- * spending an output from an address with staking credential
   -- * using an address for stake pool rewards
-  , lostAdaLastAddressOwnerActivityTimestamp :: !UTCTime
-  -- ^ Timestamp derived from `lostAdaLastActivitySlotNo`
-  , lostAdaLastAddressActivitySlotNo :: !SlotNo
+  , laLastAddressActivitySlotNo :: !(StrictMaybe SlotNo)
   -- ^ Last slot number when a transfer was made to an address associated with a reward account
   -- * sending to an address with staking credential
-  , lostAdaLastAddressActivityTimestamp :: !UTCTime
-  -- ^ Timestamp derived from `lostAdaLastActivitySlotNo`
-  , lostAdaCurrentStake :: !Coin
-  , lostAdaCurrentRewards :: !Coin
+  , laCurrentStake :: !Coin
+  , laCurrentRewards :: !Coin
   }
+  deriving (Eq, Show, Generic)
+
+instance ToRecord LostAdaAccount
+instance ToNamedRecord LostAdaAccount
+instance DefaultOrdered LostAdaAccount
+
+instance ToField r => ToField (StrictMaybe r) where
+  toField = toField . strictMaybeToMaybe
+
+instance ToField (Credential r) where
+  toField = toField . credToText
+
+instance ToField (KeyHash r) where
+  toField (KeyHash hash) = toField $ hashToTextAsHex hash
+
+instance ToField DRep where
+  toField = \case
+    DRepAlwaysAbstain -> "drep-alwaysAbstain"
+    DRepAlwaysNoConfidence -> "drep-alwaysNoConfidence"
+    DRepCredential cred -> toField $ "drep-" <> credToText cred
+
+accLostAdaTx ::
+  EraApp era =>
+  SlotNo ->
+  (LostAda, UTxO era) ->
+  Tx era ->
+  (LostAda, UTxO era)
+accLostAdaTx slotNo (!lostAda, !(UTxO utxo)) tx =
+  (newLostAda, newUTxO)
+  where
+    mSlotNo = SJust slotNo
+    -- we don't need to remove spent outputs, since they can't be spent again anyways and this is a
+    -- temporary data holder needed for a block, just so we can lookup those outputs in subsequent
+    -- transaction in a block
+    !newUTxO = UTxO (utxo `Map.union` createdOutputs)
+    !newLostAda =
+      flip (F.foldl' updateLastAddressOwner) spendableInputs $
+        flip (F.foldl' updateLastAddressActivity) createdOutputs $
+          flip (Map.foldlWithKey' updateLastWithdrawal) withdrawals $
+            F.foldl' (updateCertificates slotNo) lostAda certs
+    certs = tx ^. bodyTxL . certsTxBodyL
+    Withdrawals withdrawals = tx ^. bodyTxL . withdrawalsTxBodyL
+    spendableInputs = tx ^. bodyTxL . spendableInputsTxBodyF
+    UTxO createdOutputs = getCreatedOutputsTx tx
+    updateLastAddressActivity curLostAda txOut =
+      case txOut ^. addrTxOutL of
+        Addr _ _ (StakeRefBase cred) ->
+          let updateSlotNo la =
+                la{laLastAddressActivitySlotNo = mSlotNo}
+           in curLostAda
+                { laAccounts = Map.adjust updateSlotNo cred (laAccounts curLostAda)
+                }
+        _ -> curLostAda
+    updateLastWithdrawal curLostAda RewardAccount{raCredential} _ =
+      let updateSlotNo la =
+            la{laLastWithdrawalSlotNo = mSlotNo}
+       in curLostAda
+            { laAccounts = Map.adjust updateSlotNo raCredential (laAccounts curLostAda)
+            }
+    updateLastAddressOwner curLostAda txIn =
+      case Map.lookup txIn utxo of
+        Nothing ->
+          error $
+            "Could not find " <> show txIn <> " from transaction " <> show tx <> " in the UTxO"
+        Just txOut ->
+          case txOut ^. addrTxOutL of
+            Addr _ _ (StakeRefBase cred) ->
+              let updateSlotNo la =
+                    la{laLastAddressOwnerActivitySlotNo = mSlotNo}
+               in curLostAda
+                    { laAccounts = Map.adjust updateSlotNo cred (laAccounts curLostAda)
+                    }
+            _ -> curLostAda
+
+accLostAdaTxs :: EraApp era => SlotNo -> LostAda -> NewEpochState era -> [Tx era] -> LostAda
+accLostAdaTxs slotNo lostAda nes =
+  fst . F.foldl' (accLostAdaTx slotNo) (lostAda, (nes ^. utxoL))

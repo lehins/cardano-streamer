@@ -672,7 +672,7 @@ blockLanguageRefScriptsStats =
     (\_ _ -> (Map.empty, Map.empty))
     ( \nes txs ->
         -- We need to account for interblock dependency of transactions. The simplest
-        -- way to do that is just by adding all of the unspent outpus produced by the
+        -- way to do that is just by adding all of the unspent outputs produced by the
         -- block. This is safe to do, because we know that all transactions are valid.
         let utxo = (nes ^. utxoL) <> foldMap utxoTx txs
             (usedRefScripts, allRefScripts) =
