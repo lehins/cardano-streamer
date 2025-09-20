@@ -34,6 +34,7 @@ import Cardano.Ledger.Credential
 import Cardano.Ledger.DRep
 import Cardano.Ledger.MemoBytes
 import Cardano.Ledger.Plutus.Language
+import Cardano.Ledger.PoolParams
 import Cardano.Ledger.Shelley.LedgerState
 import Cardano.Ledger.Shelley.Rewards (aggregateRewards)
 import qualified Cardano.Ledger.Shelley.Rules as Shelley
@@ -181,6 +182,14 @@ shelleyUpdateCertitifcates slotNo curLostAda = \case
             }
      in curLostAda
           { laAccounts = Map.adjust updateSlotNo cred (laAccounts curLostAda)
+          }
+  RegPoolTxCert pp ->
+    let updateSlotNo la =
+          la
+            { laLastAddressOwnerActivitySlotNo = SJust slotNo
+            }
+     in curLostAda
+          { laAccounts = Map.adjust updateSlotNo (raCredential (ppRewardAccount pp)) (laAccounts curLostAda)
           }
   _ -> curLostAda
 
@@ -402,32 +411,50 @@ instance Monoid LostAda where
 
 data LostAdaAccount = LostAdaAccount
   { laAccount :: !(Credential 'Staking)
-  -- ^ Unique address of an account
+  -- ^ Unique identifier of an account
   , laRegisteredAtSlotNo :: !(StrictMaybe SlotNo)
   -- ^ Slot number when an account was registered last (it is possible to register and unregister an
-  -- account any number of times) It is a Maybe, because we also trac activity for unregistered
+  -- account any number of times). It is a Maybe type, because we also track activity for unregistered
   -- accounts, just in case they do get registered later.
   , laUnregisteredAtSlotNo :: !(StrictMaybe SlotNo)
-  -- ^ Slot number when account was unregistered last
+  -- ^ Slot number when account was unregistered last.  If this number is higher than
+  -- `laRegisteredAtSlotNo` then this account is no longer unregistered and `laCurrentBalance` will
+  -- be missing.
   , laStakePoolDelegation :: !(StrictMaybe (KeyHash 'StakePool))
-  -- ^ Delagation to a stake pool
+  -- ^ Delagation to a Stake Pool
   , laDRepDelegation :: !(StrictMaybe DRep)
-  -- ^ Delagation to a stake DRep
+  -- ^ Delagation to a DRep
   , laLastDelegationSlotNo :: !(StrictMaybe SlotNo)
-  -- ^ Last slot number when a witness was required for the purpose of delegation either to a DRep
-  -- or to a StakePool
+  -- ^ Slot number when the last time account submitted a delegation certificate either to a DRep or
+  -- to a StakePool.
+  --
+  -- This serves as a hard proof of when account was accessed last for the purpose of delegation
   , laLastWithdrawalSlotNo :: !(StrictMaybe SlotNo)
-  -- ^ Last slot number when a witness was required for the purpose of withdrawal
+  -- ^ Slot number when a witness was required for the purpose of withdrawal
+  --
+  -- This serves as a hard proof of when account was accessed last for the purpose of withdrawing
+  -- rewards
   , laLastAddressOwnerActivitySlotNo :: !(StrictMaybe SlotNo)
   -- ^ Last slot number when a transfer was made to an address associated with a reward account:
+  --
   -- * spending an output from an address with staking credential
-  -- * using an address for stake pool rewards
+  -- * using account as a reward account for by stake pool
+  --
+  -- This serves as an indirect proof of when account was used last. This activities are usually
+  -- performed by an owner of the account, but there is no cryptographic proof that it was indeed
+  -- done by the owner.
   , laLastAddressActivitySlotNo :: !(StrictMaybe SlotNo)
-  -- ^ Last slot number when a transfer was made to an address associated with a reward account
-  -- * sending to an address with staking credential
+  -- ^ Last slot number when a transfer was made to an address associated with a reward account:
+  --
+  -- * creating an output with an address that contains this reward account
+  --
+  -- This serves as a potential indicator that an account owner is still active, since this action
+  -- means that the owner of an account received funds from someone.
   , laCurrentStake :: !(StrictMaybe Coin)
+  -- ^ Amount of stake asssociated with an account today. When missing it means there is not a
+  -- single unspent output in the UTxO with this account.
   , laCurrentBalance :: !(StrictMaybe Coin)
-  -- ^ Latest balance of the account. When missing it means the account is no longer registered
+  -- ^ Latest balance of the account. When missing it means the account is no longer registered.
   }
   deriving (Eq, Show, Generic)
 
