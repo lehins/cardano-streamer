@@ -34,13 +34,12 @@ import Cardano.Ledger.Credential
 import Cardano.Ledger.DRep
 import Cardano.Ledger.MemoBytes
 import Cardano.Ledger.Plutus.Language
-import Cardano.Ledger.Shelley.CertState
 import Cardano.Ledger.Shelley.LedgerState
-import Cardano.Ledger.Shelley.LedgerState (EraCertState, NewEpochState)
 import Cardano.Ledger.Shelley.Rewards (aggregateRewards)
 import qualified Cardano.Ledger.Shelley.Rules as Shelley
 import Cardano.Ledger.Shelley.Scripts
 import Cardano.Ledger.State
+import Cardano.Ledger.UMap
 import Cardano.Streamer.Common
 import Control.State.Transition.Extended
 import Data.Aeson
@@ -158,7 +157,7 @@ shelleyUpdateCertitifcates slotNo curLostAda = \case
             , laLastAddressOwnerActivitySlotNo = SNothing
             , laLastAddressActivitySlotNo = SNothing
             , laCurrentStake = mempty
-            , laCurrentRewards = mempty
+            , laCurrentBalance = mempty
             }
      in curLostAda
           { laAccounts =
@@ -388,6 +387,7 @@ outScriptTxBody = map appScript . appOutScriptsTxBody
 
 newtype LostAda = LostAda
   { laAccounts :: Map (Credential 'Staking) LostAdaAccount
+  -- TODO: Add total ADA in UTxO
   }
   deriving (Show, Eq)
 
@@ -402,6 +402,7 @@ instance Monoid LostAda where
 
 data LostAdaAccount = LostAdaAccount
   { laAccount :: !(Credential 'Staking)
+  -- ^ Unique address of an account
   , laRegisteredAtSlotNo :: !(StrictMaybe SlotNo)
   -- ^ Slot number when an account was registered last (it is possible to register and unregister an
   -- account any number of times) It is a Maybe, because we also trac activity for unregistered
@@ -409,7 +410,9 @@ data LostAdaAccount = LostAdaAccount
   , laUnregisteredAtSlotNo :: !(StrictMaybe SlotNo)
   -- ^ Slot number when account was unregistered last
   , laStakePoolDelegation :: !(StrictMaybe (KeyHash 'StakePool))
+  -- ^ Delagation to a stake pool
   , laDRepDelegation :: !(StrictMaybe DRep)
+  -- ^ Delagation to a stake DRep
   , laLastDelegationSlotNo :: !(StrictMaybe SlotNo)
   -- ^ Last slot number when a witness was required for the purpose of delegation either to a DRep
   -- or to a StakePool
@@ -422,8 +425,9 @@ data LostAdaAccount = LostAdaAccount
   , laLastAddressActivitySlotNo :: !(StrictMaybe SlotNo)
   -- ^ Last slot number when a transfer was made to an address associated with a reward account
   -- * sending to an address with staking credential
-  , laCurrentStake :: !Coin
-  , laCurrentRewards :: !Coin
+  , laCurrentStake :: !(StrictMaybe Coin)
+  , laCurrentBalance :: !(StrictMaybe Coin)
+  -- ^ Latest balance of the account. When missing it means the account is no longer registered
   }
   deriving (Eq, Show, Generic)
 
@@ -504,9 +508,16 @@ accLostAdaTxs slotNo lostAda nes =
   fst . F.foldl' (accLostAdaTx slotNo) (lostAda, (nes ^. utxoL))
 
 updateCurrentStakeAndRewards :: EraApp era => LostAda -> NewEpochState era -> LostAda
-updateCurrentStakeAndRewards lostAda nes = undefined
-  -- foldl' updateRewards lostAda $ umElems umap
-  -- where
-  --   updateRewards la (UMElem (SJust rd) _ _ _) =
-  --     rdReward
-  --   umap = dsUnified (lsCertState (esLState (nesEs nes)) ^. certDStateL)
+updateCurrentStakeAndRewards lostAda nes =
+  lostAda
+    { laAccounts = Map.foldlWithKey' updateStake lostAdaWithRewards instantStake
+    }
+  where
+    lostAdaWithRewards = Map.foldlWithKey' updateRewards (laAccounts lostAda) $ umElems umap
+    updateRewards la cred (UMElem (SJust rd) _ _ _) =
+      Map.adjust (\laa -> laa{laCurrentBalance = SJust (fromCompact (rdReward rd))}) cred la
+    updateRewards la _ _ = la
+    umap = dsUnified (lsCertState (esLState (nesEs nes)) ^. certDStateL)
+    updateStake la cred stake =
+      Map.adjust (\laa -> laa{laCurrentStake = SJust (fromCompact stake)}) cred la
+    instantStake = nes ^. instantStakeG . instantStakeCredentialsL

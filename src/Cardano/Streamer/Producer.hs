@@ -837,7 +837,7 @@ runApp Opts{..} = do
                         )
                 mOutDir <- dsAppOutDir <$> ask
                 forM_ mOutDir $ \outDir -> do
-                  let fileName = "lostAda-" <> show lastSlotNo <.> "csv"
+                  let fileName = "lostAda-" <> show (unSlotNo lastSlotNo) <.> "csv"
                   writeFileBinary (outDir </> fileName) $
                     toStrictBytes $
                       encodeDefaultOrderedByName $
