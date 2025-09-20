@@ -500,3 +500,9 @@ accLostAdaTx slotNo (!lostAda, !(UTxO utxo)) tx =
 accLostAdaTxs :: EraApp era => SlotNo -> LostAda -> NewEpochState era -> [Tx era] -> LostAda
 accLostAdaTxs slotNo lostAda nes =
   fst . F.foldl' (accLostAdaTx slotNo) (lostAda, (nes ^. utxoL))
+
+
+updateCurrentStakeAndRewards :: EraApp era => LostAda -> NewEpochState era -> LostAda
+updateCurrentStakeAndRewards lostAda nes = undefined
+  where
+    -- umap = shelleyCertDState (lsCertState (esLState (nesES nes)))

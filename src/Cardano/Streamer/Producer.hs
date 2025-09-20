@@ -835,13 +835,18 @@ runApp Opts{..} = do
                             tickedExtLedgerState
                             (biBlockComponent blockWithInfo)
                         )
-                let finalData' = Map.elems (laAccounts finalData) -- TODO update final stake and rewards
                 mOutDir <- dsAppOutDir <$> ask
                 forM_ mOutDir $ \outDir -> do
                   let fileName = "lostAda-" <> show lastSlotNo <.> "csv"
                   writeFileBinary (outDir </> fileName) $
                     toStrictBytes $
-                      encodeDefaultOrderedByName finalData'
+                      encodeDefaultOrderedByName $
+                        Map.elems $
+                          laAccounts $
+                            applyNewEpochState
+                              (\_ -> finalData)
+                              (updateCurrentStakeAndRewards finalData)
+                              extLedgerState
               Benchmark -> void $ replayBenchmarkReport initLedger
               Stats -> void $ runConduit $ calcEpochStats initLedger
               ComputeRewards rewardAccounts -> do
