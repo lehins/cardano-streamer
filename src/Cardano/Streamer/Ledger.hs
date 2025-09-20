@@ -34,6 +34,8 @@ import Cardano.Ledger.Credential
 import Cardano.Ledger.DRep
 import Cardano.Ledger.MemoBytes
 import Cardano.Ledger.Plutus.Language
+import Cardano.Ledger.Shelley.CertState
+import Cardano.Ledger.Shelley.LedgerState
 import Cardano.Ledger.Shelley.LedgerState (EraCertState, NewEpochState)
 import Cardano.Ledger.Shelley.Rewards (aggregateRewards)
 import qualified Cardano.Ledger.Shelley.Rules as Shelley
@@ -501,8 +503,10 @@ accLostAdaTxs :: EraApp era => SlotNo -> LostAda -> NewEpochState era -> [Tx era
 accLostAdaTxs slotNo lostAda nes =
   fst . F.foldl' (accLostAdaTx slotNo) (lostAda, (nes ^. utxoL))
 
-
 updateCurrentStakeAndRewards :: EraApp era => LostAda -> NewEpochState era -> LostAda
 updateCurrentStakeAndRewards lostAda nes = undefined
-  where
-    -- umap = shelleyCertDState (lsCertState (esLState (nesES nes)))
+  -- foldl' updateRewards lostAda $ umElems umap
+  -- where
+  --   updateRewards la (UMElem (SJust rd) _ _ _) =
+  --     rdReward
+  --   umap = dsUnified (lsCertState (esLState (nesEs nes)) ^. certDStateL)
