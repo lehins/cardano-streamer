@@ -548,3 +548,26 @@ updateCurrentStakeAndRewards lostAda nes =
     updateStake la cred stake =
       Map.adjust (\laa -> laa{laCurrentStake = SJust (fromCompact stake)}) cred la
     instantStake = nes ^. instantStakeG . instantStakeCredentialsL
+
+data StakePoolData = StakePoolData
+  { spdEpochNo :: !EpochNo
+  , spdPoolId :: !(KeyHash 'StakePool)
+  , spdPledge :: !Coin
+  , spdCost :: !Coin
+  , spdMargin :: !Coin
+  , spdNumOwners :: !Coin
+  , spdOwnersStake :: !Coin
+  , spdAccountBalance :: !Coin
+  , spdAccountStake :: !Coin
+  , spdAccountDRepDelegation :: !DRep
+  , spdAccountStakePoolDelegation :: !(KeyHash 'StakePool)
+  , spdBlocksMintedInEpoch :: !Int
+  , spdBlocksExpectedToBeMintedInEpoch :: !Int
+  , spdPerformance :: !Rational
+  -- ^ Ratio of `spdBlocksMintedInEpoch`/`spdBlocksExpectedToBeMintedInEpoch`
+  , spdRewardsEarnedInEpoch :: !Coin
+  , spdRewardsDistributedInEpoch :: !Coin
+  , spdNumDelegatorsInEpoch :: !Int
+  , spdDelegatedStakeInEpoch :: !Coin
+  }
+  deriving (Eq, Show, Generic)
