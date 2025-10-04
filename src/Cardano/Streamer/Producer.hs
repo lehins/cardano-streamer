@@ -34,7 +34,8 @@ import Control.ResourceRegistry (withRegistry)
 import Control.State.Transition.Extended
 import Data.ByteString.Builder (lazyByteString)
 import Data.Char (toLower)
-import Data.Csv (encodeDefaultOrderedByName)
+
+-- import Data.Csv (encodeDefaultOrderedByName)
 import qualified Data.Csv.Incremental as CSV
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Merge.Strict as Map
@@ -848,17 +849,23 @@ runApp Opts{..} = do
                 forM_ mOutDir $ \outDir -> do
                   let fileName = "poolsInfo" <.> "csv"
                   withBinaryFileDurable (outDir </> fileName) WriteMode $ \hdl -> do
-                    void $ replayChainWithMap initLedger $ \extLedgerState _ tickedExtLedgerState _ _ -> do
-                      let oldEpochNo = extLedgerStateEpochNo extLedgerState
-                          (_, newEpochNo) = tickedExtLedgerStateEpochNo tickedExtLedgerState
-                      when (succ oldEpochNo == newEpochNo) $ do
-                        let poolsInfo =
-                              applyTickedNewEpochState
-                                (\_ _ -> [])
-                                (\_ -> computeStakePoolsEpochInfo)
-                                tickedExtLedgerState
-                        forM_ poolsInfo $ \poolInfo ->
-                          hPutBuilder hdl $ lazyByteString $ CSV.encode $ CSV.encodeRecord poolInfo
+                    void $
+                      replayChainWithMap initLedger $
+                        \extLedgerState slotNo tickedExtLedgerState bi newExtLedgerState -> do
+                          let oldEpochNo = extLedgerStateEpochNo extLedgerState
+                              (_, newEpochNo) = tickedExtLedgerStateEpochNo tickedExtLedgerState
+                          when (succ oldEpochNo == newEpochNo) $ do
+                            let era = getCardanoEra (biBlockComponent bi)
+                                mGlobals =
+                                  globalsFromLedgerConfig era newExtLedgerState $ pInfoConfig $ dsAppProtocolInfo app
+                            forM_ mGlobals $ \globals -> do
+                              let poolsInfo =
+                                    applyTickedNewEpochState
+                                      (\_ _ -> [])
+                                      (\_ -> computeStakePoolsEpochInfo globals slotNo)
+                                      tickedExtLedgerState
+                              forM_ poolsInfo $ \poolInfo ->
+                                hPutBuilder hdl $ lazyByteString $ CSV.encode $ CSV.encodeRecord poolInfo
               -- LOST ADA
               -- Replay -> do
               --   mOutDir <- dsAppOutDir <$> ask

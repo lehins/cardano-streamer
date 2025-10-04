@@ -9,6 +9,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
@@ -36,9 +37,11 @@ import Cardano.Ledger.MemoBytes
 import Cardano.Ledger.Plutus.Language
 import Cardano.Ledger.PoolParams
 import Cardano.Ledger.Shelley.LedgerState
-import Cardano.Ledger.Shelley.Rewards (aggregateRewards)
+import Cardano.Ledger.Shelley.Rewards
+import Cardano.Ledger.Shelley.Rewards (aggregateRewards, mkApparentPerformance)
 import qualified Cardano.Ledger.Shelley.Rules as Shelley
 import Cardano.Ledger.Shelley.Scripts
+import Cardano.Ledger.Slot (epochInfoSize)
 import Cardano.Ledger.State
 import Cardano.Ledger.UMap
 import Cardano.Streamer.Common
@@ -47,12 +50,16 @@ import Data.Aeson
 import Data.Aeson.Types (toJSONKeyText)
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Short as SBS
+import Data.Coerce
 import Data.Csv
 import Data.Fixed
 import qualified Data.Foldable as F
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust)
+import Data.Ratio
+import Data.Semigroup
 import qualified Data.Set as Set
+import qualified Data.VMap as VMap
 
 data AppLanguage
   = AppNativeLanguage
@@ -552,25 +559,31 @@ updateCurrentStakeAndRewards lostAda nes =
     instantStake = nes ^. instantStakeG . instantStakeCredentialsL
 
 data StakePoolEpochInfo = StakePoolEpochInfo
-  { speiEpochNo :: !EpochNo
-  , speiPoolId :: !(KeyHash 'StakePool)
-  , speiPledge :: !Coin
-  , speiCost :: !Coin
-  , speiMargin :: !Coin
-  , speiNumOwners :: !Coin
-  , speiOwnersStake :: !Coin
-  , speiAccountBalance :: !Coin
-  , speiAccountStake :: !Coin
-  , speiAccountDRepDelegation :: !DRep
-  , speiAccountStakePoolDelegation :: !(KeyHash 'StakePool)
-  , speiBlocksMintedInEpoch :: !Int
-  , speiBlocksExpectedToBeMintedInEpoch :: !Int
-  , speiPerformance :: !(Fixed E2)
-  -- ^ Ratio of `speiBlocksMintedInEpoch`/`speiBlocksExpectedToBeMintedInEpoch`
-  , speiRewardsEarnedInEpoch :: !Coin
-  , speiRewardsDistributedInEpoch :: !Coin
-  , speiNumDelegatorsInEpoch :: !Int
-  , speiDelegatedStakeInEpoch :: !Coin
+  { speiEpochNo :: EpochNo
+  , speiPoolId :: KeyHash 'StakePool
+  , speiPledge :: Coin
+  , speiRelativePledge :: Fixed E6
+  -- ^ Pledge amount relative to total active stake
+  , speiCost :: Coin
+  -- ^ Operating costs in ADA per year.
+  , speiMargin :: Fixed E6
+  -- ^ Unit interval: [0, 1]
+  , speiNumOwners :: Int
+  , speiOwnersStake :: Coin
+  -- ^ Important boolean flag: `speiPledger <= speiOwnersStake`, which if false lead top no rewards
+  -- to the pool.
+  , speiRelativeOwnerStake :: Fixed E6
+  -- ^ Owner stake relative to total active stake
+  , speiAccountStake :: Coin
+  , speiAccountStakePoolDelegation :: Maybe (KeyHash 'StakePool)
+  , speiBlockMintedInEpoch :: Int
+  , speiApparentPerformance :: (Fixed E6)
+  -- ^ Number of block minted by the pool in this epoch, divided by the total number of blocks
+  -- minted, further divided by the stake ratio that the pool controls.
+  , speiOwnerRewardsEarnedInEpoch :: Coin
+  --, speiMemberRewardsEarnedInEpoch :: Coin
+  , speiNumDelegatorsInEpoch :: Int
+  , speiStakeDelegatedInEpoch :: Coin
   }
   deriving (Eq, Show, Generic)
 
@@ -583,6 +596,101 @@ instance DefaultOrdered StakePoolEpochInfo
 
 computeStakePoolsEpochInfo ::
   EraApp era =>
+  Globals ->
+  SlotNo ->
   NewEpochState era ->
   [StakePoolEpochInfo]
-computeStakePoolsEpochInfo = undefined
+computeStakePoolsEpochInfo globals slotNo nes
+  | d == 0 = mapMaybe (mkStakePoolEpochInfo . snd) $ VMap.toList stakePools
+  | otherwise = []
+  where
+    d = unboundRational ppD
+    epochNo = nesEL nes
+    epochState = nesEs nes
+    pp = epochState ^. epochStateGovStateL . prevPParamsGovStateL
+    ppD = pp ^. ppDG
+    Globals{randomnessStabilisationWindow, maxLovelaceSupply, securityParameter, activeSlotCoeff} = globals
+    epochInfo = epochInfoPure globals
+    slotsPerEpoch = epochInfoSize epochInfo epochNo
+    activeStake = sumAllStake stake
+    totalStake = circulation epochState $ Coin $ toInteger maxLovelaceSupply
+    BlocksMade blocksMade = nesBprev nes
+    snapshots@SnapShots{ssStakeGo, ssFee} = esSnapshots epochState
+    SnapShot stake delegs stakePools = ssStakeGo
+    stakeAndNumDelegatorsPerPool = sumStakeAndDelegatorsPerPool delegs stake
+    blocksMadeTotal = fromIntegral $ Map.foldr (+) 0 blocksMade :: Integer
+    expectedBlocks =
+      floor $
+        (1 - d) * unboundRational (activeSlotVal activeSlotCoeff) * fromIntegral (unEpochSize slotsPerEpoch)
+    reserves = asReserves (esAccountState epochState)
+    mkStakePoolEpochInfo poolParams@PoolParams{..} = do
+      -- Filter out stake pools that didn't make any blocks
+      numBlocksPoolMade <- Map.lookup ppId blocksMade
+      let
+        accOwnerStake c o = maybe c (c <>) $ do
+          hk <- VMap.lookup (KeyHashObj o) delegs
+          guard (hk == ppId)
+          VMap.lookup (KeyHashObj o) (unStake stake)
+        poolOwnerStake = fromCompact $ Set.foldl' accOwnerStake mempty ppOwners
+        (numDelegators, poolTotalStake) = Map.findWithDefault (0, mempty) ppId stakeAndNumDelegatorsPerPool
+        sigma = unCoin poolTotalStake %? unCoin totalStake
+        sigmaA = unCoin poolTotalStake %? unCoin activeStake
+        poolOwnerRelativeStake = unCoin poolOwnerStake %? unCoin totalStake
+        apparentPerformance = mkApparentPerformance ppD sigmaA numBlocksPoolMade (fromIntegral blocksMadeTotal)
+        poolRelativePledge = unCoin ppPledge % unCoin totalStake
+        Coin maxP =
+          if ppPledge <= poolOwnerStake
+            then maxPool' (pp ^. ppA0L) (unsafeNonZero (pp ^. ppNOptL)) r sigma poolRelativePledge
+            else mempty
+        poolR = rationalToCoinViaFloor (apparentPerformance * fromIntegral maxP)
+        eta
+          | d >= 0.8 = 1
+          | otherwise = blocksMadeTotal % expectedBlocks
+        deltaR1 =
+          rationalToCoinViaFloor $
+            min 1 eta
+              * unboundRational (pp ^. ppRhoL)
+              * fromIntegral (unCoin reserves)
+        Coin rPot = ssFee <> deltaR1
+        deltaT1 = floor $ unboundRational (pp ^. ppTauL) * fromIntegral rPot
+        r = Coin $ rPot - deltaT1
+        account = raCredential ppRewardAccount
+      pure $
+        StakePoolEpochInfo
+          { speiEpochNo = epochNo
+          , speiPoolId = ppId
+          , speiPledge = ppPledge
+          , speiRelativePledge = fromRational poolRelativePledge
+          , speiCost = ppCost
+          , speiMargin = fromRational $ unboundRational ppMargin
+          , speiNumOwners = Set.size ppOwners
+          , speiOwnersStake = poolOwnerStake
+          , speiRelativeOwnerStake = fromRational poolOwnerRelativeStake
+          , speiAccountStake = maybe mempty fromCompact $ VMap.lookup account $ unStake stake
+          , speiAccountStakePoolDelegation = VMap.lookup account delegs
+          , speiBlockMintedInEpoch = fromIntegral numBlocksPoolMade
+          , speiApparentPerformance = fromRational apparentPerformance
+          , speiOwnerRewardsEarnedInEpoch =
+              leaderRew
+                poolR
+                poolParams
+                (StakeShare poolOwnerRelativeStake)
+                (StakeShare sigma)
+          --, speiMemberRewardsEarnedInEpoch =
+          , speiNumDelegatorsInEpoch = numDelegators
+          , speiStakeDelegatedInEpoch = poolTotalStake
+          }
+
+sumStakeAndDelegatorsPerPool ::
+  VMap.VMap VMap.VB VMap.VB (Credential 'Staking) (KeyHash 'StakePool) ->
+  Stake ->
+  Map (KeyHash 'StakePool) (Int, Coin)
+sumStakeAndDelegatorsPerPool delegs (Stake stake) =
+  coerce $ VMap.foldlWithKey accum Map.empty stake
+  where
+    accum !acc cred compactCoin =
+      case VMap.lookup cred delegs of
+        Nothing -> acc
+        Just kh ->
+          let !r@(!_, !_) = (Sum (1 :: Int), fromCompact compactCoin)
+           in Map.insertWith (<>) kh r acc

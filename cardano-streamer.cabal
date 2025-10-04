@@ -79,6 +79,7 @@ library
                      , transformers
                      , unliftio
                      , vector
+                     , vector-map
                      , sop-core
                      , sop-extras
 
