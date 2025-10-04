@@ -615,6 +615,24 @@ replayChainWithReport initAccState initExtLedgerState action =
       )
       `fuseUpstream` sinkNull
 
+replayChainWithMap ::
+  ExtLedgerState (CardanoBlock StandardCrypto) ->
+  ( ExtLedgerState (CardanoBlock StandardCrypto) ->
+    -- \^ Starting ledger state
+    SlotNo ->
+    -- \^ New slot number
+    Ticked (ExtLedgerState (CardanoBlock StandardCrypto)) ->
+    -- \^ Ticked ledger state
+    BlockWithInfo (CardanoBlock StandardCrypto) ->
+    -- \^ Block applied
+    ExtLedgerState (CardanoBlock StandardCrypto) ->
+    -- \^ New ledger state
+    RIO (DbStreamerApp (CardanoBlock StandardCrypto)) ()
+  ) ->
+  RIO (DbStreamerApp (CardanoBlock StandardCrypto)) (ExtLedgerState (CardanoBlock StandardCrypto))
+replayChainWithMap initExtLedgerState action =
+  fst <$> replayChainWithReport () initExtLedgerState (\_ -> action)
+
 sourceBlocksWithInfo ::
   -- | Initial accumulator
   e ->
@@ -824,19 +842,19 @@ runApp Opts{..} = do
             case oCommand of
               -- Replay -> void $ replayChain initLedger
               Replay -> do
-                (extLedgerState, (lastSlotNo, finalData)) <-
-                  replayChainWithReport (SlotNo 0, mempty) initLedger $
-                    \(_, !accState) _ slotNo tickedExtLedgerState blockWithInfo _ ->
-                      pure $
-                        ( slotNo
-                        , applyTickedNewEpochStateWithTxs
-                            (\_ _ -> mempty)
-                            (accLostAdaTxs slotNo accState)
-                            tickedExtLedgerState
-                            (biBlockComponent blockWithInfo)
-                        )
                 mOutDir <- dsAppOutDir <$> ask
                 forM_ mOutDir $ \outDir -> do
+                  (extLedgerState, (lastSlotNo, finalData)) <-
+                    replayChainWithReport (SlotNo 0, mempty) initLedger $
+                      \(_, !accState) _ slotNo tickedExtLedgerState blockWithInfo _ ->
+                        pure $
+                          ( slotNo
+                          , applyTickedNewEpochStateWithTxs
+                              (\_ _ -> mempty)
+                              (accLostAdaTxs slotNo accState)
+                              tickedExtLedgerState
+                              (biBlockComponent blockWithInfo)
+                          )
                   let fileName = "lostAda-" <> show (unSlotNo lastSlotNo) <.> "csv"
                   writeFileBinary (outDir </> fileName) $
                     toStrictBytes $
@@ -847,6 +865,31 @@ runApp Opts{..} = do
                               (\_ -> finalData)
                               (updateCurrentStakeAndRewards finalData)
                               extLedgerState
+              -- LOST ADA
+              -- Replay -> do
+              --   mOutDir <- dsAppOutDir <$> ask
+              --   forM_ mOutDir $ \outDir -> do
+              --     (extLedgerState, (lastSlotNo, finalData)) <-
+              --       replayChainWithReport (SlotNo 0, mempty) initLedger $
+              --         \(_, !accState) _ slotNo tickedExtLedgerState blockWithInfo _ ->
+              --           pure $
+              --             ( slotNo
+              --             , applyTickedNewEpochStateWithTxs
+              --                 (\_ _ -> mempty)
+              --                 (accLostAdaTxs slotNo accState)
+              --                 tickedExtLedgerState
+              --                 (biBlockComponent blockWithInfo)
+              --             )
+              --     let fileName = "lostAda-" <> show (unSlotNo lastSlotNo) <.> "csv"
+              --     writeFileBinary (outDir </> fileName) $
+              --       toStrictBytes $
+              --         encodeDefaultOrderedByName $
+              --           Map.elems $
+              --             laAccounts $
+              --               applyNewEpochState
+              --                 (\_ -> finalData)
+              --                 (updateCurrentStakeAndRewards finalData)
+              --                 extLedgerState
               Benchmark -> void $ replayBenchmarkReport initLedger
               Stats -> void $ runConduit $ calcEpochStats initLedger
               ComputeRewards rewardAccounts -> do
