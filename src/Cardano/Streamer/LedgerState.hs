@@ -17,6 +17,7 @@ module Cardano.Streamer.LedgerState (
   encodeNewEpochState,
   applyNonByronNewEpochState,
   applyNewEpochState,
+  applyTickedNewEpochState,
   applyTickedNewEpochStateWithBlock,
   applyTickedNewEpochStateWithTxs,
   tickedExtLedgerStateEpochNo,

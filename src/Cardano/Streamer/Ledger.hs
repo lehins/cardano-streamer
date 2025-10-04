@@ -45,8 +45,10 @@ import Cardano.Streamer.Common
 import Control.State.Transition.Extended
 import Data.Aeson
 import Data.Aeson.Types (toJSONKeyText)
+import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Short as SBS
 import Data.Csv
+import Data.Fixed
 import qualified Data.Foldable as F
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust)
@@ -549,25 +551,38 @@ updateCurrentStakeAndRewards lostAda nes =
       Map.adjust (\laa -> laa{laCurrentStake = SJust (fromCompact stake)}) cred la
     instantStake = nes ^. instantStakeG . instantStakeCredentialsL
 
-data StakePoolData = StakePoolData
-  { spdEpochNo :: !EpochNo
-  , spdPoolId :: !(KeyHash 'StakePool)
-  , spdPledge :: !Coin
-  , spdCost :: !Coin
-  , spdMargin :: !Coin
-  , spdNumOwners :: !Coin
-  , spdOwnersStake :: !Coin
-  , spdAccountBalance :: !Coin
-  , spdAccountStake :: !Coin
-  , spdAccountDRepDelegation :: !DRep
-  , spdAccountStakePoolDelegation :: !(KeyHash 'StakePool)
-  , spdBlocksMintedInEpoch :: !Int
-  , spdBlocksExpectedToBeMintedInEpoch :: !Int
-  , spdPerformance :: !Rational
-  -- ^ Ratio of `spdBlocksMintedInEpoch`/`spdBlocksExpectedToBeMintedInEpoch`
-  , spdRewardsEarnedInEpoch :: !Coin
-  , spdRewardsDistributedInEpoch :: !Coin
-  , spdNumDelegatorsInEpoch :: !Int
-  , spdDelegatedStakeInEpoch :: !Coin
+data StakePoolEpochInfo = StakePoolEpochInfo
+  { speiEpochNo :: !EpochNo
+  , speiPoolId :: !(KeyHash 'StakePool)
+  , speiPledge :: !Coin
+  , speiCost :: !Coin
+  , speiMargin :: !Coin
+  , speiNumOwners :: !Coin
+  , speiOwnersStake :: !Coin
+  , speiAccountBalance :: !Coin
+  , speiAccountStake :: !Coin
+  , speiAccountDRepDelegation :: !DRep
+  , speiAccountStakePoolDelegation :: !(KeyHash 'StakePool)
+  , speiBlocksMintedInEpoch :: !Int
+  , speiBlocksExpectedToBeMintedInEpoch :: !Int
+  , speiPerformance :: !(Fixed E2)
+  -- ^ Ratio of `speiBlocksMintedInEpoch`/`speiBlocksExpectedToBeMintedInEpoch`
+  , speiRewardsEarnedInEpoch :: !Coin
+  , speiRewardsDistributedInEpoch :: !Coin
+  , speiNumDelegatorsInEpoch :: !Int
+  , speiDelegatedStakeInEpoch :: !Coin
   }
   deriving (Eq, Show, Generic)
+
+instance HasResolution p => ToField (Fixed p) where
+  toField = BS8.pack . showFixed True
+
+instance ToRecord StakePoolEpochInfo
+instance ToNamedRecord StakePoolEpochInfo
+instance DefaultOrdered StakePoolEpochInfo
+
+computeStakePoolsEpochInfo ::
+  EraApp era =>
+  NewEpochState era ->
+  [StakePoolEpochInfo]
+computeStakePoolsEpochInfo = undefined

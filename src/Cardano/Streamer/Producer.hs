@@ -32,8 +32,10 @@ import Conduit
 import Control.Monad.Trans.Except
 import Control.ResourceRegistry (withRegistry)
 import Control.State.Transition.Extended
+import Data.ByteString.Builder (lazyByteString)
 import Data.Char (toLower)
 import Data.Csv (encodeDefaultOrderedByName)
+import qualified Data.Csv.Incremental as CSV
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Merge.Strict as Map
 import qualified Data.Map.Strict as Map
@@ -844,27 +846,19 @@ runApp Opts{..} = do
               Replay -> do
                 mOutDir <- dsAppOutDir <$> ask
                 forM_ mOutDir $ \outDir -> do
-                  (extLedgerState, (lastSlotNo, finalData)) <-
-                    replayChainWithReport (SlotNo 0, mempty) initLedger $
-                      \(_, !accState) _ slotNo tickedExtLedgerState blockWithInfo _ ->
-                        pure $
-                          ( slotNo
-                          , applyTickedNewEpochStateWithTxs
-                              (\_ _ -> mempty)
-                              (accLostAdaTxs slotNo accState)
-                              tickedExtLedgerState
-                              (biBlockComponent blockWithInfo)
-                          )
-                  let fileName = "lostAda-" <> show (unSlotNo lastSlotNo) <.> "csv"
-                  writeFileBinary (outDir </> fileName) $
-                    toStrictBytes $
-                      encodeDefaultOrderedByName $
-                        Map.elems $
-                          laAccounts $
-                            applyNewEpochState
-                              (\_ -> finalData)
-                              (updateCurrentStakeAndRewards finalData)
-                              extLedgerState
+                  let fileName = "poolsInfo" <.> "csv"
+                  withBinaryFileDurable (outDir </> fileName) WriteMode $ \hdl -> do
+                    void $ replayChainWithMap initLedger $ \extLedgerState _ tickedExtLedgerState _ _ -> do
+                      let oldEpochNo = extLedgerStateEpochNo extLedgerState
+                          (_, newEpochNo) = tickedExtLedgerStateEpochNo tickedExtLedgerState
+                      when (succ oldEpochNo == newEpochNo) $ do
+                        let poolsInfo =
+                              applyTickedNewEpochState
+                                (\_ _ -> [])
+                                (\_ -> computeStakePoolsEpochInfo)
+                                tickedExtLedgerState
+                        forM_ poolsInfo $ \poolInfo ->
+                          hPutBuilder hdl $ lazyByteString $ CSV.encode $ CSV.encodeRecord poolInfo
               -- LOST ADA
               -- Replay -> do
               --   mOutDir <- dsAppOutDir <$> ask
