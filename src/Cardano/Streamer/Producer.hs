@@ -489,11 +489,11 @@ instance Display RewardsPerEpoch where
       , display (unEpochNo rewardsEpochNo)
       ]
         ++ [ "\n    "
-            <> displayShow cred
-            <> ": "
-            <> display rew
-            <> "  "
-            <> display wdrl
+               <> displayShow cred
+               <> ": "
+               <> display rew
+               <> "  "
+               <> display wdrl
            | (cred, (Coin rew, Coin wdrl)) <- Map.toList rewardsAndWithdrawals
            ]
     where
