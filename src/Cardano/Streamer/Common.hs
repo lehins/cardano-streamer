@@ -28,8 +28,8 @@ module Cardano.Streamer.Common (
   ValidationMode (..),
   HasImmutableDb (..),
   HasResourceRegistry (..),
-  formatRewardAccount,
-  parseRewardAccount,
+  formatAccountAddress,
+  parseAccountAddress,
   getElapsedTime,
   getDiskSnapshotFilePath,
   writeReport,
@@ -58,6 +58,7 @@ import Cardano.Ledger.BaseTypes (
 import Cardano.Ledger.Coin
 import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
+import Cardano.Ledger.TxIn
 import Cardano.Protocol.Crypto (StandardCrypto)
 import Cardano.Streamer.Time
 import Control.Monad.Trans.Except
@@ -76,7 +77,7 @@ import qualified Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import qualified Ouroboros.Consensus.Storage.LedgerDB as LDB
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..), snapshotToDirName)
-import RIO as X hiding (RIO, runRIO)
+import RIO as X hiding (Memoized, RIO, runRIO)
 import RIO.FilePath
 import qualified RIO.Text as T
 import RIO.Time
@@ -97,6 +98,7 @@ deriving instance ToField EpochNo
 deriving instance Aeson.ToJSONKey EpochNo
 
 deriving instance Display BlockNo
+deriving instance Display TxId
 
 instance ToField UTCTime where
   toField = BS8.pack . iso8601Show
@@ -241,7 +243,7 @@ data Command
   = Replay
   | Benchmark
   | Stats
-  | ComputeRewards (NonEmpty RewardAccount)
+  | ComputeRewards (NonEmpty AccountAddress)
   deriving (Show)
 
 instance Display Command where
@@ -290,19 +292,21 @@ data Opts = Opts
   }
   deriving (Show)
 
-formatRewardAccount :: RewardAccount -> Text
-formatRewardAccount RewardAccount{raNetwork, raCredential} =
-  either (error . show) A.bech32 $ A.stakeAddress discriminant $ credentialToDelegation raCredential
+formatAccountAddress :: AccountAddress -> Text
+formatAccountAddress AccountAddress{aaNetworkId, aaId} =
+  either (error . show) A.bech32 $
+    A.stakeAddress discriminant $
+      credentialToDelegation (unAccountId aaId)
   where
-    discriminant = A.NetworkTag $ fromIntegral @Word8 @Word32 $ networkToWord8 $ raNetwork
+    discriminant = A.NetworkTag $ fromIntegral @Word8 @Word32 $ networkToWord8 aaNetworkId
     credentialToDelegation = \case
       KeyHashObj (KeyHash kh) ->
         A.DelegationFromKeyHash $ A.KeyHash A.Delegation $ hashToBytes kh
       ScriptHashObj (ScriptHash sh) ->
         A.DelegationFromScriptHash $ A.ScriptHash $ hashToBytes sh
 
-parseRewardAccount :: MonadFail m => Text -> m RewardAccount
-parseRewardAccount txt =
+parseAccountAddress :: MonadFail m => Text -> m AccountAddress
+parseAccountAddress txt =
   case A.fromBech32 txt of
     Nothing -> fail "Can't parse as Bech32 Address"
     Just addr ->
@@ -317,7 +321,7 @@ parseRewardAccount txt =
             word8ToNetwork $ fromIntegral @Word32 @Word8 networkTag
           maybe
             (fail $ "Address does not contain a Staking Credential: " ++ show txt)
-            (pure . RewardAccount tag)
+            (pure . AccountAddress tag . AccountId)
             $ (KeyHashObj . KeyHash . partialHash <$> A.infoStakeKeyHash ai)
               <|> (ScriptHashObj . ScriptHash . partialHash <$> A.infoStakeScriptHash ai)
   where

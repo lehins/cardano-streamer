@@ -62,13 +62,11 @@ mkDbArgs ::
   , MonadReader env m
   , HasResourceRegistry env
   , HasLogFunc env
-  , Show (Header blk)
-  , Node.RunNode blk
   ) =>
   FilePath ->
   Maybe DiskSnapshot ->
-  ProtocolInfo blk ->
-  m (ChainDB.ChainDbArgs Identity IO blk)
+  ProtocolInfo (CardanoBlock StandardCrypto) ->
+  m (ChainDB.ChainDbArgs Identity IO (CardanoBlock StandardCrypto))
 mkDbArgs dbDir diskSnapshot ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
   registry <- view registryL
   dbTracer <- mkTracer (Just "Trace") LevelDebug
