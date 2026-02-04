@@ -30,6 +30,7 @@ import qualified Data.ByteString.Lazy as BSL
 import Ouroboros.Consensus.Block
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Config (configCodec)
+import Ouroboros.Consensus.HardFork.Combinator.Serialisation.SerialiseDisk ()
 import Ouroboros.Consensus.Ledger.Abstract (
   applyBlockLedgerResultWithValidation,
  )
@@ -136,9 +137,13 @@ advanceSlot (SlotInspector SlotInspection{..}) !bwi = do
   let infoConfig = pInfoConfig $ dsAppProtocolInfo app
       blockBytes = fst (biBlockComponent bwi)
       mStopSlotNo = dsAppStopSlotNo app
+      decodedBlock = do
+        blockDecoder <-
+          decodeFullDecoder "Block" (decodeDisk (configCodec infoConfig)) blockBytes
+        blockDecoder blockBytes
   (a, !block) <- siDecodeBlock bwi $ do
-    case decodeFullDecoder "Block" (decodeDisk (configCodec infoConfig)) blockBytes of
-      Right decBlock -> pure $! decBlock blockBytes
+    case decodedBlock of
+      Right decBlock -> pure $! decBlock
       Left err -> do
         writeBlockWithState (fst <$> bwi) Nothing Nothing
         throwString $ show err
