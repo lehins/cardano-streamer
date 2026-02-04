@@ -192,7 +192,7 @@ getTPraosBlockSummary ::
   BlockSummary
 getTPraosBlockSummary era block =
   let (blockHeaderBody, blockHeaderSize) =
-        case bheader (shelleyBlockRaw block) of
+        case blockHeader (shelleyBlockRaw block) of
           bh@(BHeader bhBody _) -> (bhBody, originalBytesSize bh)
       (txsSeq, blockSize) = case shelleyBlockRaw block of
         Block _ blockBody -> (blockBody ^. txSeqBlockBodyL, bBodySize (ProtVer (eraProtVerLow @era) 0) blockBody)
@@ -217,9 +217,9 @@ getPraosBlockSummary ::
   ShelleyBlock (Praos c) era ->
   BlockSummary
 getPraosBlockSummary era block =
-  let blockHeader = bheader (shelleyBlockRaw block)
-      blockHeaderBody = headerBody blockHeader
-      blockHeaderSize = headerSize blockHeader
+  let bHeader = blockHeader (shelleyBlockRaw block)
+      blockHeaderBody = headerBody bHeader
+      blockHeaderSize = headerSize bHeader
       (txsSeq, blockSize) = case shelleyBlockRaw block of
         Block _ blockBody -> (blockBody ^. txSeqBlockBodyL, bBodySize (ProtVer (eraProtVerLow @era) 0) blockBody)
       blockBodySize = fromIntegral (hbBodySize blockHeaderBody)
@@ -236,11 +236,11 @@ getPraosBlockSummary era block =
           , bpTxsSummary = getTxsSummary txsSeq
           }
 
-getTxsSummary :: (EraTx era, Foldable t) => t (Tx era) -> Vector TxSummary
+getTxsSummary :: (EraTx era, Foldable t) => t (Tx TopTx era) -> Vector TxSummary
 getTxsSummary txsSeq =
   V.fromList $! getTxSummary <$!> toList txsSeq
 
-getTxSummary :: EraTx era => Tx era -> TxSummary
+getTxSummary :: EraTx era => Tx TopTx era -> TxSummary
 getTxSummary tx =
   TxSummary
     { tpSize = tx ^. sizeTxF
@@ -251,7 +251,7 @@ getTxSummary tx =
 withBlockTxs ::
   forall a c.
   ([B.ATxAux ByteString] -> a) ->
-  (forall era. EraApp era => [Tx era] -> a) ->
+  (forall era. EraApp era => [Tx TopTx era] -> a) ->
   CardanoBlock c ->
   a
 withBlockTxs applyByronTxs applyNonByronTxs =
@@ -271,8 +271,8 @@ getByronTxs byronBlock =
 getShelleyOnwardsTxs ::
   EraApp era =>
   ShelleyBlock (p c) era ->
-  [Tx era]
-getShelleyOnwardsTxs = toList . view txSeqBlockBodyL . bbody . shelleyBlockRaw
+  [Tx TopTx era]
+getShelleyOnwardsTxs = toList . view txSeqBlockBodyL . blockBody . shelleyBlockRaw
 
 getSlotNo :: Crypto c => CardanoBlock c -> SlotNo
 getSlotNo =
@@ -290,11 +290,11 @@ getSlotNoWithEra =
 
 getTPraosBHeaderBody :: Crypto c => ShelleyBlock (TPraos c) era -> BHBody c
 getTPraosBHeaderBody block =
-  case bheader (shelleyBlockRaw block) of
+  case blockHeader (shelleyBlockRaw block) of
     BHeader bhBody _ -> bhBody
 
 getPraosBHeaderBody :: Crypto c => ShelleyBlock (Praos c) era -> HeaderBody c
-getPraosBHeaderBody block = headerBody (bheader (shelleyBlockRaw block))
+getPraosBHeaderBody block = headerBody (blockHeader (shelleyBlockRaw block))
 
 type family BlockHeader era where
   BlockHeader ShelleyEra = BHeader StandardCrypto
@@ -327,19 +327,21 @@ readBlock fp =
     Left exc -> throwIO exc
     Right res -> pure res
 
-writeTx :: forall era m. (EraTx era, MonadIO m) => FilePath -> Tx era -> m ()
+writeTx :: forall era m. (EraTx era, MonadIO m) => FilePath -> Tx TopTx era -> m ()
 writeTx fp = liftIO . BSL.writeFile fp . serialize (eraProtVerLow @era)
 
 filterBlockWithdrawals ::
-  Set (Credential 'Staking) ->
+  Set (Credential Staking) ->
   CardanoBlock c ->
-  Map (Credential 'Staking) Coin
+  Map (Credential Staking) Coin
 filterBlockWithdrawals creds =
   withBlockTxs (const mempty) $ \txs ->
     Map.unionsWith (<+>) $
       map
         ( \tx ->
-            let wdrls = Map.mapKeys raCredential $ unWithdrawals (tx ^. bodyTxL . withdrawalsTxBodyL)
+            let wdrls =
+                  Map.mapKeys (unAccountId . aaAccountId) $
+                    unWithdrawals (tx ^. bodyTxL . withdrawalsTxBodyL)
              in wdrls `Map.restrictKeys` creds
         )
         txs
@@ -347,7 +349,7 @@ filterBlockWithdrawals creds =
 accScriptsStats ::
   forall ms c.
   ToMaxScript ms =>
-  (forall era. EraApp era => Tx era -> [AppScript]) ->
+  (forall era. EraApp era => Tx TopTx era -> [AppScript]) ->
   CardanoBlock c ->
   Map AppLanguage (ScriptsStats ms)
 accScriptsStats fTx =

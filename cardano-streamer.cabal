@@ -46,7 +46,7 @@ library
                      , async
                      , bytestring
                      , base16-bytestring
-                     , cardano-api ^>= 10.20
+                     , cardano-api ^>= 10.23
                      , cardano-addresses
                      , cardano-binary
                      , cardano-crypto-class
@@ -58,7 +58,7 @@ library
                      , cardano-ledger-babbage
                      , cardano-ledger-binary
                      , cardano-ledger-byron
-                     , cardano-ledger-core ^>= 1.18
+                     , cardano-ledger-core ^>= 1.19
                      , cardano-ledger-shelley
                      , cardano-ledger-conway >= 1.18.1
                      , cardano-protocol-tpraos
@@ -71,11 +71,11 @@ library
                      , FailT
                      , fs-api
                      , strict-sop-core
-                     , ouroboros-consensus >= 0.28.0.0
+                     , ouroboros-consensus:{ouroboros-consensus, ouroboros-consensus-lsm, ouroboros-consensus-lmdb} >= 0.28.0.0
                      , ouroboros-consensus-protocol
                      , ouroboros-consensus-cardano
                      , ouroboros-consensus-diffusion
-                     , ouroboros-network-api
+                     , ouroboros-network:api >= 0.24
                      , io-classes
                      , nothunks
                      , profunctors

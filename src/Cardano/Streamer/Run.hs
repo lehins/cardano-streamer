@@ -57,7 +57,7 @@ replayEpochStats = do
   writeNamedCsv "EpochStats" (epochStatsToNamedCsv epochStats)
   logInfo $ "Final summary: \n    " <> display (fold $ unEpochStats epochStats)
 
-replayRewards :: NE.NonEmpty RewardAccount -> RIO App ()
+replayRewards :: NE.NonEmpty AccountAddress -> RIO App ()
 replayRewards accounts = do
   mOutDir <- dsAppOutDir <$> ask
   case mOutDir of
@@ -65,8 +65,8 @@ replayRewards accounts = do
       logError "Output directory is required for exporting rewards"
     Just outDir -> do
       let filePaths =
-            [ ( raCredential account
-              , outDir </> T.unpack (formatRewardAccount account) <.> "csv"
+            [ ( unAccountId (aaAccountId account)
+              , outDir </> T.unpack (formatAccountAddress account) <.> "csv"
               )
             | account <- NE.toList accounts
             ]

@@ -11,8 +11,8 @@ repository cardano-haskell-packages
     d4a35cd3121aa00d18544bb0ac01c3e1691d618f462c46129271bccf39f7e8ee
 
 index-state:
-  , hackage.haskell.org 2025-10-17T00:26:22Z
-  , cardano-haskell-packages 2025-11-20T19:55:27Z
+  , hackage.haskell.org 2026-01-12T19:29:50Z
+  , cardano-haskell-packages 2026-01-27T13:37:12Z
 
 packages: .
 
@@ -52,32 +52,36 @@ package HsOpenSSL
 --     subdir: command-line
 --             core
 
--- source-repository-package
---   type: git
---   location: https://github.com/IntersectMBO/cardano-api
---   tag: 79163b1b9354db72568dd37e4128c1349526b70a
---   --sha256: sha256-JRl+usqWmzc2EEPjpzAXQ/IHfdfnRs8x09dfF1h25lc=
---   subdir:
---     cardano-api
+source-repository-package
+  type: git
+  location: https://github.com/IntersectMBO/cardano-api
+  tag: 3ee96146551c266ae1a1e954eada8c87a39d403c
+  --sha256: sha256-XmbixDSCNQaUn3YGtAhn95gfJTJokk7vsUsL4VvBcdU=
+  subdir:
+    cardano-api
 
--- source-repository-package
---   type: git
---   location: https://github.com/IntersectMBO/ouroboros-consensus
---   tag: 576e8a6a8822d518af872f3cf8db0388afa65c78
---   --sha256: sha256-N82KhFUNVo6ZHfTEyXO+6L9ayhr9Cg4jvWR4BhZD38U=
---   subdir:
---     ouroboros-consensus
---     ouroboros-consensus-cardano
---     ouroboros-consensus-diffusion
---     ouroboros-consensus-protocol
+source-repository-package
+  type: git
+  location: https://github.com/IntersectMBO/ouroboros-consensus
+  tag: 93709ba7fe1145227e7128e21d535421a74b1920
+  --sha256: sha256-vLwuGcjbMhSBVVJ6qT2XstuJJrildXnpst//B23in0Y=
+  subdir:
+    ouroboros-consensus
+    ouroboros-consensus-cardano
+    ouroboros-consensus-diffusion
+    ouroboros-consensus-protocol
+    strict-sop-core
+    sop-extras
 
--- source-repository-package
---   type: git
---   location: https://github.com/IntersectMBO/ouroboros-network
---   tag: 5618742c1e15ed1256fc62794eec7560040d8c0a
---   subdir:
---     ouroboros-network
---     ouroboros-network-api
+source-repository-package
+   type: git
+   location: https://github.com/IntersectMBO/ouroboros-network
+   tag: 228bb2045784a9c180651dedeea9af9396140f47
+   --sha256: sha256-q/93M6+TtnqWiguOiwuUSJljA7nrICOsu+5SLl6jiCc=
+   subdir:
+     ouroboros-network
+     cardano-diffusion
+     network-mux
 
 -- source-repository-package
 --   type: git
@@ -89,35 +93,34 @@ package HsOpenSSL
 --     -- cardano-crypto-praos
 --     -- cardano-crypto-tests
 
--- source-repository-package
---   type: git
---   location: https://github.com/IntersectMBO/cardano-ledger
---   tag: fdfa80fad362fa07c82f7b8a6837a66a6701940b
---   --sha256: sha256-nxWk4qNutbir3uXa1Fm9yrgtnw8STe0KUjYMJjdmRXs=
---   subdir:
---     eras/allegra/impl
---     eras/alonzo/impl
---     eras/alonzo/test-suite
---     eras/babbage/impl
---     eras/babbage/test-suite
---     eras/conway/impl
---     eras/mary/impl
---     eras/shelley/impl
---     eras/shelley/test-suite
---     eras/shelley-ma/test-suite
---     libs/cardano-ledger-api
---     libs/cardano-ledger-core
---     libs/cardano-ledger-binary
---     libs/cardano-protocol-tpraos
---     libs/non-integral
---     libs/small-steps
---     libs/cardano-data
---     libs/set-algebra
---     libs/vector-map
---     eras/byron/chain/executable-spec
---     eras/byron/ledger/executable-spec
---     eras/byron/ledger/impl
---     eras/byron/crypto
+source-repository-package
+  type: git
+  location: https://github.com/IntersectMBO/cardano-ledger
+  tag: e2e9e1b8e99faf3b36b6c379b663f4eb67583371
+  --sha256: sha256-62GbsZTfM52FQZy6mQ8ywS4aIVsA2rqIBP/oo4ouuPA=
+  subdir:
+    eras/allegra/impl
+    eras/alonzo/impl
+    eras/alonzo/test-suite
+    eras/babbage/impl
+    eras/conway/impl
+    eras/dijkstra/impl
+    eras/mary/impl
+    eras/shelley/impl
+    eras/shelley/test-suite
+    eras/shelley-ma/test-suite
+    libs/cardano-ledger-api
+    libs/cardano-ledger-core
+    libs/cardano-ledger-binary
+    libs/cardano-protocol-tpraos
+    libs/non-integral
+    libs/small-steps
+    libs/cardano-data
+    libs/vector-map
+    eras/byron/chain/executable-spec
+    eras/byron/ledger/executable-spec
+    eras/byron/ledger/impl
+    eras/byron/crypto
 
 
 -- source-repository-package

@@ -67,13 +67,13 @@ import Cardano.Ledger.BaseTypes
 import Cardano.Ledger.Binary
 import qualified Cardano.Ledger.Binary.Plain as Plain
 import Cardano.Ledger.Coin
+import Cardano.Ledger.Compactible
 import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Genesis
 import Cardano.Ledger.Shelley.Genesis as Shelley
 import Cardano.Ledger.Shelley.LedgerState hiding (LedgerState)
 import Cardano.Ledger.State
-import Cardano.Ledger.UMap as UM
 import Cardano.Ledger.Val
 import Cardano.Slotting.EpochInfo (fixedEpochInfo)
 import Cardano.Slotting.EpochInfo.API (hoistEpochInfo)
@@ -606,23 +606,23 @@ applyTickedNonByronNewEpochState f =
 
 queryAccounts ::
   EraCertState era =>
-  Set (Credential 'Staking) ->
+  Set (Credential Staking) ->
   NewEpochState era ->
-  Map (Credential 'Staking) (AccountState era)
+  Map (Credential Staking) (AccountState era)
 queryAccounts creds nes =
   (nes ^. nesEpochStateL . esLStateL . lsCertStateL . certDStateL . accountsL . accountsMapL)
     `Map.restrictKeys` creds
 
 lookupRewards ::
   EraCertState era =>
-  Set (Credential 'Staking) ->
+  Set (Credential Staking) ->
   NewEpochState era ->
-  Map (Credential 'Staking) Coin
+  Map (Credential Staking) Coin
 lookupRewards creds =
   Map.map (fromCompact . (^. balanceAccountStateL)) . queryAccounts creds
 
 lookupTotalRewards ::
-  EraCertState era => Set (Credential 'Staking) -> NewEpochState era -> Maybe Coin
+  EraCertState era => Set (Credential Staking) -> NewEpochState era -> Maybe Coin
 lookupTotalRewards creds nes =
   guard (Map.null credsRewards) $> fromCompact (foldMap (^. balanceAccountStateL) credsRewards)
   where
@@ -668,12 +668,12 @@ tickedExtLedgerStateEpochNo =
 
 detectNewRewards ::
   (HasLogFunc env, MonadReader env m, MonadIO m) =>
-  Set (Credential 'Staking) ->
+  Set (Credential Staking) ->
   EpochNo ->
-  Map (Credential 'Staking) Coin ->
-  Map (Credential 'Staking) Coin ->
+  Map (Credential Staking) Coin ->
+  Map (Credential Staking) Coin ->
   Ticked (ExtLedgerState (CardanoBlock c)) mk ->
-  m (EpochNo, Maybe (Map (Credential 'Staking) Coin, Map (Credential 'Staking) Coin))
+  m (EpochNo, Maybe (Map (Credential Staking) Coin, Map (Credential Staking) Coin))
 detectNewRewards creds prevEpochNo prevRewards epochWithdrawals extLedgerState = do
   let (ti, curEpochNo) = tickedExtLedgerStateEpochNo extLedgerState
   unless (curEpochNo == prevEpochNo || curEpochNo == succ prevEpochNo) $
@@ -884,7 +884,7 @@ applyTickedNewEpochStateWithBlock fByron fTPraos fPraos tickedExtLedgerState blo
 
 applyTickedNewEpochStateWithTxs ::
   (ChainValidationState -> [B.ATxAux ByteString] -> a) ->
-  (forall era. EraApp era => NewEpochState era -> [Tx era] -> a) ->
+  (forall era. EraApp era => NewEpochState era -> [Tx TopTx era] -> a) ->
   Ticked (ExtLedgerState (CardanoBlock c)) mk ->
   CardanoBlock c ->
   a
