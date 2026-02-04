@@ -19,20 +19,23 @@ module Cardano.Streamer.Storage (
 )
 where
 
+-- import Cardano.Streamer.Measure (measureAction)
+
+import Cardano.Ledger.Binary (DecoderError)
 import Cardano.Slotting.Slot (SlotNo (..), WithOrigin (..))
 import Cardano.Streamer.Common
---import Cardano.Streamer.Measure (measureAction)
 import Control.ResourceRegistry (runWithTempRegistry)
+import Data.Functor.Contravariant ((>$<))
 import qualified Data.SOP.Dict as Dict
-import Data.Typeable
 import Ouroboros.Consensus.Block (ConvertRawHash, GetPrevHash, Point (..))
 import Ouroboros.Consensus.Block.NestedContent (NestedCtxt)
-import Ouroboros.Consensus.Cardano.Block (Header)
+import Ouroboros.Consensus.Cardano.Block (CardanoBlock, Header, StandardCrypto)
+import Ouroboros.Consensus.Config (configCodec)
 import Ouroboros.Consensus.HardFork.Abstract (HasHardForkHistory)
 import Ouroboros.Consensus.HeaderValidation (AnnTip, headerStateTip)
 import Ouroboros.Consensus.Ledger.Abstract (ApplyBlock (getBlockKeySets))
 import Ouroboros.Consensus.Ledger.Basics (IsLedger, LedgerState)
-import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState (headerState))
+import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState (headerState), getExtLedgerCfg)
 import Ouroboros.Consensus.Ledger.Inspect (InspectLedger)
 import Ouroboros.Consensus.Ledger.SupportsProtocol (LedgerSupportsProtocol)
 import Ouroboros.Consensus.Ledger.Tables (withLedgerTables)
@@ -43,13 +46,17 @@ import Ouroboros.Consensus.Storage.ImmutableDB.Impl (ImmutableDbArgs)
 import qualified Ouroboros.Consensus.Storage.ImmutableDB.Stream as ImmutableDB
 import qualified Ouroboros.Consensus.Storage.LedgerDB as LDB
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
+import qualified Ouroboros.Consensus.Storage.LedgerDB.TraceEvent as LDB.Trace (TraceEvent (..))
 import qualified Ouroboros.Consensus.Storage.LedgerDB.V1 as LDB.V1
 import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.Args as LDB.V1.Args
+import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.BackingStore as LDB.V1.Backend
+import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.BackingStore.Impl.InMemory as LDB.V1.InMemory
 import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.BackingStore.Impl.LMDB as LDB.V1.LMDB
 import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.Snapshots as LDB.V1.Snapshots
 import qualified Ouroboros.Consensus.Storage.LedgerDB.V2 as LDB.V2
-import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.Args as LDB.V2.Args
+import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.Backend as LDB.V2.Backend
 import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.InMemory as LDB.V2.InMemory
+import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.LSM as LSM
 import Ouroboros.Consensus.Storage.Serialisation (
   DecodeDisk,
   DecodeDiskDep,
@@ -59,12 +66,7 @@ import Ouroboros.Consensus.Storage.Serialisation (
  )
 import qualified Ouroboros.Consensus.Util.IOLike as IOLike
 import Ouroboros.Network.Block (genesisPoint, pointSlot)
-
--- import Ouroboros.Consensus.Util.IndexedMemPack (IndexedMemPack)
--- import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.BackingStore as LDB.V1.Backend
--- import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.BackingStore.Impl.LMDB as LDB.V1.LMDB
--- import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.Backend as LDB.V2.Backend
--- import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.LSM as LDB.V2.LSM
+import System.FS.API.Types (mkFsPath)
 
 openLedgerDb ::
   forall blk env.
@@ -83,35 +85,39 @@ openLedgerDb ldbArgs = do
   -- (measure, (ledgerDb, _, testInternals)) <-
   --   measureAction $
   (ledgerDb, _, testInternals) <-
-      liftIO $
-        case LDB.lgrFlavorArgs ldbArgs of
-          -- case LDB.lgrBackendArgs ldbArgs of
-          -- LDB.LedgerDbBackendArgsV1 ldbBackendArgs ->
-          LDB.LedgerDbFlavorArgsV1 ldbBackendArgs -> do
-            let
-              snapManager = LDB.V1.Snapshots.snapshotManager ldbArgs
-              initDb = LDB.V1.mkInitDb ldbArgs ldbBackendArgs getBlock snapManager getVolatileSuffix
-            LDB.openDBInternal ldbArgs initDb snapManager emptyStream genesisPoint
-          LDB.LedgerDbFlavorArgsV2 (LDB.V2.Args.V2Args LDB.V2.Args.InMemoryHandleArgs) -> do
-            let
-              snapManager = LDB.V2.InMemory.snapshotManager ldbArgs
-              ldbBackendArgs :: LDB.V2.Args.HandleEnv IO
-              ldbBackendArgs = LDB.V2.Args.InMemoryHandleEnv
-              initDb = LDB.V2.mkInitDb ldbArgs ldbBackendArgs getBlock snapManager getVolatileSuffix
-            LDB.openDBInternal ldbArgs initDb snapManager emptyStream genesisPoint
-          LDB.LedgerDbFlavorArgsV2 args -> error $ "Unsupported args: " <> show (typeOf args)
-  -- LDB.LedgerDbBackendArgsV2 (LDB.V2.SomeBackendArgs ldbBackendArgs) -> do
-  --   let
-  --     hasFS = LDB.lgrHasFS ldbArgs
-  --     resourcesTracer = LedgerDBFlavorImplEvent . LDB.FlavorImplSpecificTraceV2 >$< LDB.lgrTracer args
-  --   resources <-
-  --     LDB.V2.mkResources (Proxy @blk) resourcesTracer ldbBackendArgs (LDB.lgrRegistry ldbArgs) hasFS
-  --   let
-  --     codecConfig = configCodec . getExtLedgerCfg . LDB.ledgerDbCfg $ LDB.lgrConfig args
-  --     snapTracer = LedgerDBSnapshotEvent >$< LDB.lgrTracer ldbArgs
-  --     snapManager = LDB.V2.snapshotManager (Proxy @blk) resources codecConfig tracer hasFS
-  --     initDb = LDB.V2.mkInitDb ldbArgs getBlock snapManager getVolatileSuffix resources
-  --   pure (snapManager, initDb)
+    liftIO $
+      case LDB.lgrBackendArgs ldbArgs of
+        LDB.LedgerDbBackendArgsV1 ldbBackendArgs -> do
+          let
+            snapManager = LDB.V1.Snapshots.snapshotManager ldbArgs
+            initDb = LDB.V1.mkInitDb ldbArgs ldbBackendArgs getBlock snapManager getVolatileSuffix
+          LDB.openDBInternal ldbArgs initDb snapManager emptyStream genesisPoint
+        -- LDB.LedgerDbFlavorArgsV2 (LDB.V2.Args.V2Args LDB.V2.Args.InMemoryHandleArgs) -> do
+        --   let
+        --     snapManager = LDB.V2.InMemory.snapshotManager ldbArgs
+        --     ldbBackendArgs :: LDB.V2.Args.HandleEnv IO
+        --     ldbBackendArgs = LDB.V2.Args.InMemoryHandleEnv
+        --     initDb = LDB.V2.mkInitDb ldbArgs ldbBackendArgs getBlock snapManager getVolatileSuffix
+        --   LDB.openDBInternal ldbArgs initDb snapManager emptyStream genesisPoint
+        -- LDB.LedgerDbFlavorArgsV2 args -> error $ "Unsupported args: " <> show (typeOf args)
+        LDB.LedgerDbBackendArgsV2 (LDB.V2.Backend.SomeBackendArgs ldbBackendArgs) -> do
+          let
+            hasFS = LDB.lgrHasFS ldbArgs
+            resourcesTracer = LDB.LedgerDBFlavorImplEvent . LDB.FlavorImplSpecificTraceV2 >$< LDB.lgrTracer ldbArgs
+          resources <-
+            LDB.V2.Backend.mkResources
+              (Proxy @blk)
+              resourcesTracer
+              ldbBackendArgs
+              (LDB.lgrRegistry ldbArgs)
+              hasFS
+          let
+            codecConfig = configCodec . getExtLedgerCfg . LDB.ledgerDbCfg $ LDB.lgrConfig ldbArgs
+            snapTracer = LDB.Trace.LedgerDBSnapshotEvent >$< LDB.lgrTracer ldbArgs
+            snapManager =
+              LDB.V2.Backend.snapshotManager (Proxy @blk) resources codecConfig snapTracer hasFS
+            initDb = LDB.V2.mkInitDb ldbArgs getBlock snapManager getVolatileSuffix resources
+          LDB.openDBInternal ldbArgs initDb snapManager emptyStream genesisPoint
   -- TODO: fix measurement
   logInfo $ "Done reading the ledger state in: " -- <> display measure
   pure $!
@@ -195,17 +201,16 @@ data LedgerDbBackend
   = InMemV1
   | LMDBV1
   | InMemV2
+  | LSMV2 !FilePath !Word64
 
--- \| LSMV2
-
-mkLedgerDbArgs :: LedgerDbBackend -> LDB.LedgerDbFlavorArgs Identity IO
+mkLedgerDbArgs :: LedgerDbBackend -> LDB.LedgerDbBackendArgs IO (CardanoBlock StandardCrypto)
 mkLedgerDbArgs ldbBackend =
   case ldbBackend of
     InMemV1 ->
-      LDB.LedgerDbFlavorArgsV1 $
+      LDB.LedgerDbBackendArgsV1 $
         LDB.V1.Args.V1Args
           LDB.V1.Args.DisableFlushing
-          LDB.V1.Args.InMemoryBackingStoreArgs
+          (LDB.V1.Backend.SomeBackendArgs LDB.V1.InMemory.InMemArgs)
     LMDBV1 ->
       let
         defaultLMDBLimits :: LDB.V1.LMDB.LMDBLimits
@@ -216,16 +221,16 @@ mkLedgerDbArgs ldbBackend =
             , LDB.V1.LMDB.lmdbMaxReaders = 16
             }
        in
-        LDB.LedgerDbFlavorArgsV1 $
+        LDB.LedgerDbBackendArgsV1 $
           LDB.V1.Args.V1Args LDB.V1.Args.DisableFlushing $
-            LDB.V1.Args.LMDBBackingStoreArgs "lmdb" defaultLMDBLimits Dict.Dict
+            LDB.V1.Backend.SomeBackendArgs $
+              LDB.V1.LMDB.LMDBBackingStoreArgs "lmdb" defaultLMDBLimits Dict.Dict
     InMemV2 ->
-      LDB.LedgerDbFlavorArgsV2 $ LDB.V2.Args.V2Args LDB.V2.Args.InMemoryHandleArgs
-
--- LSMV2 ->
---   LDB.LedgerDbBackendArgsV2 $
---     LDB.V2.SomeBackendArgs $
---       LSM.LSMArgs (mkFsPath ["lsm"]) lsmSalt (LSM.stdMkBlockIOFS dbDir)
+      LDB.LedgerDbBackendArgsV2 $ LDB.V2.Backend.SomeBackendArgs LDB.V2.InMemory.InMemArgs
+    LSMV2 lsmDbDir lsmSalt ->
+      LDB.LedgerDbBackendArgsV2 $
+        LDB.V2.Backend.SomeBackendArgs $
+          LSM.LSMArgs (mkFsPath ["lsm"]) lsmSalt (LSM.stdMkBlockIOFS lsmDbDir)
 
 withImmutableDb ::
   ( MonadUnliftIO m
@@ -233,7 +238,7 @@ withImmutableDb ::
   , GetPrevHash blk
   , ConvertRawHash blk
   , EncodeDisk blk blk
-  , DecodeDisk blk (LByteString -> blk)
+  , DecodeDisk blk (LByteString -> Either DecoderError blk)
   , DecodeDiskDep (NestedCtxt Header) blk
   , ReconstructNestedCtxt Header blk
   , HasBinaryBlockInfo blk

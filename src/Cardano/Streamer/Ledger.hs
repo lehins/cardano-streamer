@@ -13,7 +13,6 @@
 
 module Cardano.Streamer.Ledger where
 
-import Cardano.Ledger.Allegra.Scripts
 import Cardano.Ledger.Alonzo.Scripts
 import Cardano.Ledger.Alonzo.Tx
 import Cardano.Ledger.Api.Era
@@ -29,7 +28,6 @@ import Cardano.Ledger.Plutus.Language
 import Cardano.Ledger.Shelley.LedgerState (NewEpochState)
 import Cardano.Ledger.Shelley.Rewards (aggregateRewards)
 import qualified Cardano.Ledger.Shelley.Rules as Shelley
-import Cardano.Ledger.Shelley.Scripts
 import Cardano.Ledger.State
 import Cardano.Streamer.Common
 import Control.State.Transition.Extended
@@ -69,20 +67,18 @@ instance ToJSONKey AppLanguage where
   toJSONKey = toJSONKeyText appLanguageToText
 
 data AppScript where
-  AppMultiSig :: MultiSig era -> AppScript
-  AppTimelock :: Timelock era -> AppScript
+  AppNativeScript ::
+    Memoized (NativeScript era) => NativeScript era -> AppScript
   AppPlutusScript :: PlutusLanguage l => Plutus l -> AppScript
 
 appLanguage :: AppScript -> AppLanguage
 appLanguage = \case
-  AppMultiSig{} -> AppNativeLanguage
-  AppTimelock{} -> AppNativeLanguage
+  AppNativeScript{} -> AppNativeLanguage
   AppPlutusScript p -> AppPlutusLanguage (plutusLanguage p)
 
 appScriptBytes :: AppScript -> ShortByteString
 appScriptBytes = \case
-  AppMultiSig ns -> getMemoRawBytes ns
-  AppTimelock ns -> getMemoRawBytes ns
+  AppNativeScript ns -> getMemoRawBytes ns
   AppPlutusScript ps -> unPlutusBinary (plutusBinary ps)
 
 appScriptSize :: AppScript -> Int
@@ -101,48 +97,48 @@ class
   where
   appScript :: Script era -> AppScript
 
-  appOutScriptsTxBody :: TxBody era -> [Script era]
+  appOutScriptsTxBody :: TxBody TopTx era -> [Script era]
   appOutScriptsTxBody = mempty
 
-  appRefScriptsTxBody :: UTxO era -> TxBody era -> [Script era]
+  appRefScriptsTxBody :: UTxO era -> TxBody TopTx era -> [Script era]
   appRefScriptsTxBody = mempty
 
   -- | All of the unspent outputs produced by the transaction
-  utxoTx :: Tx era -> UTxO era
+  utxoTx :: Tx TopTx era -> UTxO era
 
   getRewardsFromEvents ::
     proxy era ->
     Event (EraRule "TICK" era) ->
-    Map (Credential 'Staking) Coin
+    Map (Credential Staking) Coin
   default getRewardsFromEvents ::
     ( Event (EraRule "TICK" era) ~ Shelley.ShelleyTickEvent era
     , Event (EraRule "NEWEPOCH" era) ~ Shelley.ShelleyNewEpochEvent era
     ) =>
     proxy era ->
     Event (EraRule "TICK" era) ->
-    Map (Credential 'Staking) Coin
+    Map (Credential Staking) Coin
   getRewardsFromEvents _ (Shelley.TickNewEpochEvent (Shelley.TotalRewardEvent _ rs)) =
     aggregateRewards (ProtVer (eraProtVerLow @era) 0) rs
   getRewardsFromEvents _ _ = Map.empty
 
 instance EraApp ShelleyEra where
-  appScript = AppMultiSig
+  appScript = AppNativeScript
   utxoTx tx = txouts (tx ^. bodyTxL)
 
 instance EraApp AllegraEra where
-  appScript = AppTimelock
+  appScript = AppNativeScript
   utxoTx tx = txouts (tx ^. bodyTxL)
 
 instance EraApp MaryEra where
-  appScript = AppTimelock
+  appScript = AppNativeScript
   utxoTx tx = txouts (tx ^. bodyTxL)
 
 instance EraApp AlonzoEra where
-  appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
+  appScript s = fromJust (appNativeScriptScript s <|> appPlutusScript s)
   utxoTx tx = txouts (tx ^. bodyTxL)
 
 instance EraApp BabbageEra where
-  appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
+  appScript s = fromJust (appNativeScriptScript s <|> appPlutusScript s)
   appOutScriptsTxBody = babbageScriptOutsTxBody
   appRefScriptsTxBody = getAllReferenceScripts
   utxoTx tx
@@ -150,7 +146,7 @@ instance EraApp BabbageEra where
     | otherwise = collOuts (tx ^. bodyTxL)
 
 instance EraApp ConwayEra where
-  appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
+  appScript s = fromJust (appNativeScriptScript s <|> appPlutusScript s)
   appOutScriptsTxBody = babbageScriptOutsTxBody
   appRefScriptsTxBody = getAllReferenceScripts
   utxoTx tx
@@ -161,7 +157,7 @@ instance EraApp ConwayEra where
   getRewardsFromEvents _ _ = Map.empty
 
 instance EraApp DijkstraEra where
-  appScript s = fromJust (appTimelockScript s <|> appPlutusScript s)
+  appScript s = fromJust (appNativeScriptScript s <|> appPlutusScript s)
   appOutScriptsTxBody = babbageScriptOutsTxBody
   appRefScriptsTxBody = getAllReferenceScripts
   utxoTx tx
@@ -171,9 +167,9 @@ instance EraApp DijkstraEra where
     aggregateRewards (ProtVer (eraProtVerLow @DijkstraEra) 0) rs
   getRewardsFromEvents _ _ = Map.empty
 
-appTimelockScript ::
-  (EraScript era, NativeScript era ~ Timelock era) => Script era -> Maybe AppScript
-appTimelockScript script = AppTimelock <$> getNativeScript script
+appNativeScriptScript ::
+  (EraScript era, Memoized (NativeScript era)) => Script era -> Maybe AppScript
+appNativeScriptScript script = AppNativeScript <$> getNativeScript script
 
 appPlutusScript :: AlonzoEraScript era => Script era -> Maybe AppScript
 appPlutusScript script = do
@@ -184,7 +180,7 @@ appPlutusScript script = do
 getAllReferenceScripts ::
   BabbageEraTxBody era =>
   UTxO era ->
-  TxBody era ->
+  TxBody TopTx era ->
   [Script era]
 getAllReferenceScripts (UTxO mp) txBody =
   mapMaybe refScript $ Map.elems $ Map.restrictKeys mp inputs
@@ -205,7 +201,7 @@ appScriptTxWits txWits = Map.map appScript (txWits ^. scriptTxWitsL)
 -- | Plutus Scripts from outputs
 babbageScriptOutsTxBody ::
   BabbageEraTxBody era =>
-  TxBody era ->
+  TxBody TopTx era ->
   [Script era]
 babbageScriptOutsTxBody txBody =
   mapMaybe getOutputScript $ toList (txBody ^. outputsTxBodyL)
@@ -255,7 +251,7 @@ scriptsPerLanguage = foldl' combinePlutusScripts mempty
 refScriptsTxBody ::
   EraApp era =>
   UTxO era ->
-  TxBody era ->
+  TxBody TopTx era ->
   (Map ScriptHash AppScript, [AppScript])
 refScriptsTxBody utxo txBody =
   (refScriptsUsed, map appScript refScripts)
@@ -268,7 +264,7 @@ refScriptsTxBody utxo txBody =
         (refScriptsProvided `Map.restrictKeys` scriptHashesNeeded)
           `Map.union` Map.filter isNativeScript refScriptsProvided
 
-outScriptTxBody :: EraApp era => TxBody era -> [AppScript]
+outScriptTxBody :: EraApp era => TxBody TopTx era -> [AppScript]
 outScriptTxBody = map appScript . appOutScriptsTxBody
 
 -- plutusOutScriptTxBody :: EraApp era c => TxBody era -> [PlutusWithLanguage]
