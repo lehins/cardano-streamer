@@ -166,21 +166,24 @@ advanceSlot (SlotInspector SlotInspection{..}) !bwi = do
     reportValidationError errorMessage = do
       logStickyStatus
       logError $
-        "Encountered an error while validating a block: " <> display (biBlockHeaderHash bwi)
+        "Encountered an error at slot: "
+          <> display slotNo
+          <> " with block: "
+          <> display (biBlockHeaderHash bwi)
       writeBlockWithState (fst <$> bwi) (Just block) (Just prevExtLedgerState)
       throwString $ show errorMessage
-    reportException :: RIO App a -> RIO App a
-    reportException =
+    reportException :: Text -> RIO App a -> RIO App a
+    reportException name =
       flip withException $ \(exc :: SomeException) -> do
         when (isSyncException exc) $ do
-          logError $ "Received an exception: " <> displayShow exc
+          logError $ "Received an exception in " <> display name <> ": " <> displayShow exc
           reportValidationError exc
-  (c, !tickExtLedgerState) <- siTick b $ \enableTickEvents -> reportException $ do
+  (c, !tickExtLedgerState) <- siTick b $ \enableTickEvents -> reportException "TICK" $ do
     pure $!
       applyChainTickLedgerResult enableTickEvents extLedgerConfig slotNo $
         forgetLedgerTables prevExtLedgerState
   (d, !newExtLedgerState) <-
-    siApplyBlock c $ \enableBlockEvents -> reportException $ do
+    siApplyBlock c $ \enableBlockEvents -> reportException "BBODY" $ do
       let validation =
             case dsAppValidationMode app of
               FullValidation -> ValidateAll

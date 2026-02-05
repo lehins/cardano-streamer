@@ -27,6 +27,23 @@ package cardano-crypto-praos
 package HsOpenSSL
   flags: +use-pkg-config
 
+
+-- package cardano-ledger-core
+--   flags: +asserts
+
+-- package cardano-ledger-shelley
+--   flags: +asserts
+
+-- package cardano-ledger-mary
+--   flags: +asserts
+
+-- package cardano-ledger-conway
+--   flags: +asserts
+
+-- package small-steps
+--   flags: +sts_assert
+
+
 -- source-repository-package
 --     type: git
 --     location: https://github.com/input-output-hk/cardano-addresses
