@@ -245,6 +245,7 @@ diskSnapshotsWriter extLedgerState =
         go _ (diskSnapshot : ss)
           | dsNumber diskSnapshot == unSlotNo (tipSlotNo tip) = do
               ledgerDbStoreSnapshot diskSnapshot
+              logInfo $ "Created a SnapShot at " <> display (tipSlotNo tip)
               go True ss
           | dsNumber diskSnapshot < unSlotNo (tipSlotNo tip) = do
               ledgerDbStoreSnapshot $ diskSnapshot{dsNumber = unSlotNo (tipSlotNo tip)}
