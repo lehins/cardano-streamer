@@ -38,6 +38,7 @@ import Ouroboros.Consensus.Ledger.Extended (ExtLedgerCfg (..), ExtLedgerState)
 import Ouroboros.Consensus.Ledger.Tables.MapKind (ValuesMK)
 import Ouroboros.Consensus.Ledger.Tables.Utils (applyDiffs, forgetLedgerTables, prependDiffs)
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
+import Ouroboros.Consensus.Shelley.Ledger.Block (ShelleyBlock (..))
 import Ouroboros.Consensus.Shelley.Ledger.Ledger ()
 import Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
@@ -275,10 +276,17 @@ writeBlockWithState BlockWithInfo{biSlotNo, biBlockHeaderHash, biBlockComponent}
       slotNoStr = show (unSlotNo biSlotNo)
       prefix = outDir </> slotNoStr <> "_" <> T.unpack blockHeaderHashHex
       mkTxFileName ix = prefix <> "#" <> show ix <.> "cbor"
-      fileNameBlock = prefix <.> "cbor"
-    liftIO $ BSL.writeFile fileNameBlock rawBlockBytes
-    logInfo $ "Written block to: " <> display (T.pack fileNameBlock)
-    forM_ mBlock $ \block ->
+      rawBlockFileName = prefix <> "_raw" <.> "cbor"
+      blockFileName = prefix <.> "cbor"
+    liftIO $ BSL.writeFile rawBlockFileName rawBlockBytes
+    logInfo $ "Written raw block to: " <> display (T.pack rawBlockFileName)
+    forM_ mBlock $ \block -> do
+      withProtocolBlock
+        (const $ pure ())
+        (\_ -> writeBlock blockFileName . shelleyBlockRaw)
+        (\_ -> writeBlock blockFileName . shelleyBlockRaw)
+        block
+      logInfo $ "Written Block to: " <> display (T.pack blockFileName)
       withBlockTxs
         (liftIO . print)
         (zipWithM_ (\ix -> writeTx (mkTxFileName ix)) [0 :: Int ..])

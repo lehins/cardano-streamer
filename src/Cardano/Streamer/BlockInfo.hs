@@ -48,6 +48,7 @@ import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (getOneEraHash)
 import Ouroboros.Consensus.Protocol.Praos (Praos)
 import Ouroboros.Consensus.Protocol.Praos.Header hiding (Header)
+import qualified Ouroboros.Consensus.Protocol.Praos.Header as Praos (Header)
 import Ouroboros.Consensus.Protocol.TPraos (TPraos)
 import Ouroboros.Consensus.Shelley.Ledger.Block hiding (Header)
 import Ouroboros.Network.SizeInBytes (SizeInBytes)
@@ -294,6 +295,37 @@ getTPraosBHeaderBody block =
 
 getPraosBHeaderBody :: Crypto c => ShelleyBlock (Praos c) era -> HeaderBody c
 getPraosBHeaderBody block = headerBody (bheader (shelleyBlockRaw block))
+
+type family BlockHeader era where
+  BlockHeader ShelleyEra = BHeader StandardCrypto
+  BlockHeader AllegraEra = BHeader StandardCrypto
+  BlockHeader MaryEra = BHeader StandardCrypto
+  BlockHeader AlonzoEra = BHeader StandardCrypto
+  BlockHeader BabbageEra = Praos.Header StandardCrypto
+  BlockHeader ConwayEra = Praos.Header StandardCrypto
+  BlockHeader DijkstraEra = Header StandardCrypto
+
+writeBlock ::
+  forall era h m.
+  ( Era era
+  , EncCBOR (Block h era)
+  , MonadIO m
+  ) =>
+  FilePath -> Block h era -> m ()
+writeBlock fp block =
+  liftIO $ BS.writeFile fp $ serialize' (eraProtVerLow @era) block
+
+readBlock ::
+  forall era m.
+  ( Era era
+  , DecCBOR (Annotator (Block (BlockHeader era) era))
+  , MonadIO m
+  ) =>
+  FilePath -> m (Block (BlockHeader era) era)
+readBlock fp =
+  liftIO (BSL.readFile fp) <&> decodeFullAnnotator (eraProtVerLow @era) "Block" decCBOR >>= \case
+    Left exc -> throwIO exc
+    Right res -> pure res
 
 writeTx :: forall era m. (EraTx era, MonadIO m) => FilePath -> Tx era -> m ()
 writeTx fp = liftIO . BSL.writeFile fp . serialize (eraProtVerLow @era)
