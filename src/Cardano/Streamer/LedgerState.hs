@@ -1,3 +1,4 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -29,6 +30,8 @@ module Cardano.Streamer.LedgerState (
   extLedgerStateCardanoEra,
   extLedgerStateEpochNo,
   extractLedgerEvents,
+  readGenesis,
+  mkGlobals,
   globalsFromLedgerConfig,
   detectNewRewards,
   EpochBlockStats (..),
@@ -66,17 +69,28 @@ import qualified Cardano.Ledger.Binary.Plain as Plain
 import Cardano.Ledger.Coin
 import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
+import Cardano.Ledger.Genesis
+import Cardano.Ledger.Shelley.Genesis as Shelley
 import Cardano.Ledger.Shelley.LedgerState hiding (LedgerState)
 import Cardano.Ledger.State
 import Cardano.Ledger.UMap as UM
 import Cardano.Ledger.Val
+import Cardano.Slotting.EpochInfo (fixedEpochInfo)
 import Cardano.Slotting.EpochInfo.API (hoistEpochInfo)
 import Cardano.Slotting.Slot
+import Cardano.Slotting.Time (mkSlotLength)
 import Cardano.Streamer.BlockInfo
 import Cardano.Streamer.Common
 import Cardano.Streamer.Ledger
 import Control.Monad.Trans.Except (runExcept, withExceptT)
-import Data.Aeson (ToJSON (..), defaultOptions, fieldLabelModifier, genericToJSON)
+import Data.Aeson (
+  FromJSON,
+  ToJSON (..),
+  defaultOptions,
+  eitherDecodeFileStrict,
+  fieldLabelModifier,
+  genericToJSON,
+ )
 import qualified Data.ByteString.Lazy as BSL
 import Data.Csv (Field, ToNamedRecord (..), header, namedRecord, toField, (.=))
 import qualified Data.Map.Merge.Strict as Map
@@ -432,6 +446,24 @@ instance Display Tip where
 tipFromExtLedgerState ::
   ExtLedgerState (CardanoBlock StandardCrypto) mk -> Maybe Tip
 tipFromExtLedgerState = tipFromHeaderState . headerState
+
+readGenesis ::
+  forall era m.
+  (FromJSON (Genesis era), MonadIO m) =>
+  FilePath -> m (Genesis era)
+readGenesis genesisFilePath =
+  liftIO (eitherDecodeFileStrict genesisFilePath)
+    >>= \case
+      Left err -> throwString err
+      Right genesis -> pure genesis
+
+mkGlobals :: ShelleyGenesis -> Globals
+mkGlobals shelleyGenesis = Shelley.mkShelleyGlobals shelleyGenesis epochInfoE
+  where
+    epochInfoE =
+      fixedEpochInfo
+        (sgEpochLength shelleyGenesis)
+        (mkSlotLength . fromNominalDiffTimeMicro $ sgSlotLength shelleyGenesis)
 
 globalsFromLedgerConfig ::
   CardanoEra ->

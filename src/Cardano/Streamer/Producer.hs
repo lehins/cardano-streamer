@@ -198,6 +198,8 @@ advanceSlot (SlotInspector SlotInspection{..}) !bwi = do
               extLedgerConfig
               block
               extLedgerState
+      -- when (slotNo > SlotNo 16688800) $
+      --   throwString "Simluating validation failure"
       case runExcept applyBlock of
         Right lrBlock -> pure $! prependDiffs tickExtLedgerState (lrResult lrBlock)
         Left errorMessage -> do
