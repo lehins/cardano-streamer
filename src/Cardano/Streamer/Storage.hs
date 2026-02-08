@@ -21,7 +21,7 @@ where
 
 import Cardano.Slotting.Slot (SlotNo (..), WithOrigin (..))
 import Cardano.Streamer.Common
---import Cardano.Streamer.Measure (measureAction)
+import Cardano.Streamer.Measure (measureAction)
 import Control.ResourceRegistry (runWithTempRegistry)
 import qualified Data.SOP.Dict as Dict
 import Data.Typeable
@@ -42,6 +42,7 @@ import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import Ouroboros.Consensus.Storage.ImmutableDB.Impl (ImmutableDbArgs)
 import qualified Ouroboros.Consensus.Storage.ImmutableDB.Stream as ImmutableDB
 import qualified Ouroboros.Consensus.Storage.LedgerDB as LDB
+import Ouroboros.Consensus.Storage.LedgerDB.Args (lgrStartSnapshot)
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
 import qualified Ouroboros.Consensus.Storage.LedgerDB.V1 as LDB.V1
 import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.Args as LDB.V1.Args
@@ -79,10 +80,12 @@ openLedgerDb ldbArgs = do
   let
     getBlock _ = pure (error "No getBlock")
     getVolatileSuffix = LDB.praosGetVolatileSuffix $ LDB.ledgerDbCfgSecParam $ LDB.lgrConfig ldbArgs
-  logInfo $ "Reading initial ledger state: " -- <> display (T.pack snapshotFilePath)
-  -- (measure, (ledgerDb, _, testInternals)) <-
-  --   measureAction $
-  (ledgerDb, _, testInternals) <-
+  case lgrStartSnapshot ldbArgs of
+    Nothing -> logInfo "Initializing Ledger State"
+    Just diskSnapshot ->
+      logInfo $ "Reading initial ledger state: " <> display diskSnapshot
+  (measure, (ledgerDb, _, testInternals)) <-
+    measureAction $
       liftIO $
         case LDB.lgrFlavorArgs ldbArgs of
           -- case LDB.lgrBackendArgs ldbArgs of
@@ -113,7 +116,7 @@ openLedgerDb ldbArgs = do
   --     initDb = LDB.V2.mkInitDb ldbArgs getBlock snapManager getVolatileSuffix resources
   --   pure (snapManager, initDb)
   -- TODO: fix measurement
-  logInfo $ "Done reading the ledger state in: " -- <> display measure
+  logInfo $ "Done reading the ledger state in: " <> display measure
   pure $!
     LedgerDb
       { lLedgerDb = ledgerDb

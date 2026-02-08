@@ -79,7 +79,8 @@ library
                      , nothunks
                      , profunctors
                      , resource-registry
-                     , rio
+                     -- prevent falling into bug in mconcat for Utf8Builder
+                     , rio <0.1.23 || >=0.1.24
                      , serialise
                      , small-steps
                      , text
