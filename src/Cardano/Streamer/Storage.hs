@@ -33,16 +33,13 @@ import Ouroboros.Consensus.HeaderValidation (AnnTip, headerStateTip)
 import Ouroboros.Consensus.Ledger.Abstract (ApplyBlock (getBlockKeySets))
 import Ouroboros.Consensus.Ledger.Basics (IsLedger, LedgerState)
 import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState (headerState))
-import Ouroboros.Consensus.Ledger.Inspect (InspectLedger)
 import Ouroboros.Consensus.Ledger.SupportsProtocol (LedgerSupportsProtocol)
 import Ouroboros.Consensus.Ledger.Tables (withLedgerTables)
 import Ouroboros.Consensus.Ledger.Tables.Basics (LedgerTables)
 import Ouroboros.Consensus.Ledger.Tables.MapKind (DiffMK, EmptyMK, ValuesMK)
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import Ouroboros.Consensus.Storage.ImmutableDB.Impl (ImmutableDbArgs)
-import qualified Ouroboros.Consensus.Storage.ImmutableDB.Stream as ImmutableDB
 import qualified Ouroboros.Consensus.Storage.LedgerDB as LDB
-import Ouroboros.Consensus.Storage.LedgerDB.Args (lgrStartSnapshot)
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
 import qualified Ouroboros.Consensus.Storage.LedgerDB.V1 as LDB.V1
 import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.Args as LDB.V1.Args
@@ -59,18 +56,47 @@ import Ouroboros.Consensus.Storage.Serialisation (
   ReconstructNestedCtxt,
  )
 import qualified Ouroboros.Consensus.Util.IOLike as IOLike
-import Ouroboros.Network.Block (genesisPoint, pointSlot)
+import Ouroboros.Network.Block (pointSlot)
+import System.FS.API (SomeHasFS (..), createDirectoryIfMissing, mkFsPath)
 
--- import Ouroboros.Consensus.Util.IndexedMemPack (IndexedMemPack)
--- import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.BackingStore as LDB.V1.Backend
--- import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.BackingStore.Impl.LMDB as LDB.V1.LMDB
--- import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.Backend as LDB.V2.Backend
--- import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.LSM as LDB.V2.LSM
+-- | Similar to `LDB.openDbInternal`, except open LedgerDb without any replay or modifcations to any
+-- of the existing snasphots.
+openLedgerDbNoReplay ::
+  ( LedgerSupportsProtocol blk
+  , HasLogFunc env
+  , HasCallStack
+  ) =>
+  -- | Ledger Db args
+  LDB.LedgerDbArgs Identity IO blk ->
+  -- | Db initializer
+  LDB.InitDB db IO blk ->
+  RIO env (LDB.LedgerDB' IO blk, LDB.TestInternals' IO blk)
+openLedgerDbNoReplay ldbArgs initDb = do
+  case hasFS of
+    SomeHasFS fs -> liftIO $ createDirectoryIfMissing fs True (mkFsPath [])
+  db <- case lgrStartSnapshot of
+    Nothing -> liftIO $ initFromGenesis
+    Just diskSnapshot -> do
+      logInfo $ "Reading initial ledger state: " <> display diskSnapshot
+      measureAction (liftIO $ initFromSnapshot diskSnapshot) >>= \case
+        (_, Left err) ->
+          error (show err)
+        (measure, Right (db, _pt)) -> do
+          logInfo $
+            "Done reading initial Ledger State snapshot in: " <> display measure
+          pure db
+  (ledgerDb, internal) <- liftIO $ LDB.mkLedgerDb initDb db
+  return (ledgerDb, internal)
+  where
+    LDB.InitDB{LDB.initFromGenesis, LDB.initFromSnapshot} = initDb
+    LDB.LedgerDbArgs
+      { LDB.lgrStartSnapshot
+      , LDB.lgrHasFS = hasFS
+      } = ldbArgs
 
 openLedgerDb ::
   forall blk env.
   ( LedgerSupportsProtocol blk
-  , InspectLedger blk
   , HasHardForkHistory blk
   , LDB.LedgerSupportsLedgerDB blk
   , HasLogFunc env
@@ -80,51 +106,28 @@ openLedgerDb ldbArgs = do
   let
     getBlock _ = pure (error "No getBlock")
     getVolatileSuffix = LDB.praosGetVolatileSuffix $ LDB.ledgerDbCfgSecParam $ LDB.lgrConfig ldbArgs
-  case lgrStartSnapshot ldbArgs of
-    Nothing -> logInfo "Initializing Ledger State"
-    Just diskSnapshot ->
-      logInfo $ "Reading initial ledger state: " <> display diskSnapshot
-  (measure, (ledgerDb, _, testInternals)) <-
-    measureAction $
-      liftIO $
-        case LDB.lgrFlavorArgs ldbArgs of
-          -- case LDB.lgrBackendArgs ldbArgs of
-          -- LDB.LedgerDbBackendArgsV1 ldbBackendArgs ->
-          LDB.LedgerDbFlavorArgsV1 ldbBackendArgs -> do
-            let
-              snapManager = LDB.V1.Snapshots.snapshotManager ldbArgs
-              initDb = LDB.V1.mkInitDb ldbArgs ldbBackendArgs getBlock snapManager getVolatileSuffix
-            LDB.openDBInternal ldbArgs initDb snapManager emptyStream genesisPoint
-          LDB.LedgerDbFlavorArgsV2 (LDB.V2.Args.V2Args LDB.V2.Args.InMemoryHandleArgs) -> do
-            let
-              snapManager = LDB.V2.InMemory.snapshotManager ldbArgs
-              ldbBackendArgs :: LDB.V2.Args.HandleEnv IO
-              ldbBackendArgs = LDB.V2.Args.InMemoryHandleEnv
-              initDb = LDB.V2.mkInitDb ldbArgs ldbBackendArgs getBlock snapManager getVolatileSuffix
-            LDB.openDBInternal ldbArgs initDb snapManager emptyStream genesisPoint
-          LDB.LedgerDbFlavorArgsV2 args -> error $ "Unsupported args: " <> show (typeOf args)
-  -- LDB.LedgerDbBackendArgsV2 (LDB.V2.SomeBackendArgs ldbBackendArgs) -> do
-  --   let
-  --     hasFS = LDB.lgrHasFS ldbArgs
-  --     resourcesTracer = LedgerDBFlavorImplEvent . LDB.FlavorImplSpecificTraceV2 >$< LDB.lgrTracer args
-  --   resources <-
-  --     LDB.V2.mkResources (Proxy @blk) resourcesTracer ldbBackendArgs (LDB.lgrRegistry ldbArgs) hasFS
-  --   let
-  --     codecConfig = configCodec . getExtLedgerCfg . LDB.ledgerDbCfg $ LDB.lgrConfig args
-  --     snapTracer = LedgerDBSnapshotEvent >$< LDB.lgrTracer ldbArgs
-  --     snapManager = LDB.V2.snapshotManager (Proxy @blk) resources codecConfig tracer hasFS
-  --     initDb = LDB.V2.mkInitDb ldbArgs getBlock snapManager getVolatileSuffix resources
-  --   pure (snapManager, initDb)
-  -- TODO: fix measurement
-  logInfo $ "Done reading the ledger state in: " <> display measure
+  logInfo "Initializing LedgerDb"
+  (ledgerDb, testInternals) <-
+    case LDB.lgrFlavorArgs ldbArgs of
+      LDB.LedgerDbFlavorArgsV1 ldbBackendArgs -> do
+        let
+          snapManager = LDB.V1.Snapshots.snapshotManager ldbArgs
+          initDb = LDB.V1.mkInitDb ldbArgs ldbBackendArgs getBlock snapManager getVolatileSuffix
+        openLedgerDbNoReplay ldbArgs initDb
+      LDB.LedgerDbFlavorArgsV2 (LDB.V2.Args.V2Args LDB.V2.Args.InMemoryHandleArgs) -> do
+        let
+          snapManager = LDB.V2.InMemory.snapshotManager ldbArgs
+          ldbBackendArgs :: LDB.V2.Args.HandleEnv IO
+          ldbBackendArgs = LDB.V2.Args.InMemoryHandleEnv
+          initDb = LDB.V2.mkInitDb ldbArgs ldbBackendArgs getBlock snapManager getVolatileSuffix
+        openLedgerDbNoReplay ldbArgs initDb
+      LDB.LedgerDbFlavorArgsV2 args -> error $ "Unsupported args: " <> show (typeOf args)
+  logInfo $ "Done initializing LedgerDb"
   pure $!
     LedgerDb
       { lLedgerDb = ledgerDb
       , lTestInternals = testInternals
       }
-
-emptyStream :: Applicative m => ImmutableDB.StreamAPI m blk a
-emptyStream = ImmutableDB.StreamAPI $ \_ k -> k $ Right $ pure ImmutableDB.NoMoreItems
 
 ledgerDbStateWithTablesForBlock ::
   (HasLedgerDb env blk, LedgerSupportsProtocol blk) =>
