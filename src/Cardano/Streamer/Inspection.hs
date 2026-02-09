@@ -87,12 +87,12 @@ isTrueNextEnum prev cur =
   case compare (succ prev) cur of
     EQ -> True
     GT | prev == cur -> False
-    _ ->
-      error $
-        "Unexpected previous: "
-          <> show prev
-          <> " with relation to the current: "
-          <> show cur
+    _ -> False
+      -- error $
+      --   "Unexpected previous: "
+      --     <> show prev
+      --     <> " with relation to the current: "
+      --     <> show cur
 
 data SlotInspection b dec ldbPull tick appBlock ldbPush r = SlotInspection
   { siDecodeBlock ::
