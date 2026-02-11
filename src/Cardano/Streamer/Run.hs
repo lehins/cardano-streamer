@@ -13,6 +13,7 @@
 module Cardano.Streamer.Run (runApp) where
 
 import Cardano.Ledger.Address
+import Cardano.Ledger.BaseTypes (EpochNo (..), SlotNo (..), TxIx (..))
 import Cardano.Streamer.Benchmark
 import Cardano.Streamer.Common
 import Cardano.Streamer.Inspection
@@ -87,6 +88,41 @@ replayRewards accounts = do
           sourceBlocksWithInspector (GetPure ()) (SlotInspector rewardsInspection)
             .| concatMapC (>>= transformAndFilterRewards rewardHandles)
             .| mapM_C (mapM_ (uncurry writeRewardDistribution))
+
+dumpAccountActivity :: NonEmpty AccountAddress -> RIO App ()
+dumpAccountActivity (accAddress :| []) = do
+  let cred = unAccountId (aaAccountId accAddress)
+  mOutDir <- dsAppOutDir <$> ask
+  case mOutDir of
+    Nothing ->
+      logError "Output directory is required for dumpAccountActivity"
+    Just outDir -> do
+      aa <-
+        runConduit $
+          sourceBlocksWithInspector_ (SlotInspector slotWithBlockInspection)
+            .| foldlC (addAccountActivity cred) emptyAccountActivity
+      let writeBinTx name BinTx{..} = do
+            let fp =
+                  outDir
+                    </> mconcat
+                      [ name
+                      , "_"
+                      , show (unSlotNo binTxSlotNo)
+                      , "_"
+                      , show (unTxIx binTxIx)
+                      , "_"
+                      , show (unEpochNo binTxEpochNo)
+                      , "_"
+                      , show binTxCardanoEra
+                      , "_"
+                      , T.unpack (textDisplay binTxId)
+                      ]
+                      <.> "cbor"
+            writeFileBinary fp binTx
+      forM_ (aaTxsWithAccount aa) $ writeBinTx "Account"
+      forM_ (aaTxsWithStakePools aa) $ writeBinTx "StakePools"
+      forM_ (aaTxsWithDReps aa) $ writeBinTx "DReps"
+dumpAccountActivity _ = error "Not implemented yet"
 
 runApp :: Opts -> IO ()
 runApp Opts{..} = do
@@ -166,7 +202,9 @@ runApp Opts{..} = do
               Replay -> replayChain
               Benchmark -> replayBenchmarkReport
               Stats -> replayEpochStats
-              ComputeRewards accountIds -> replayRewards accountIds
+              ComputeRewards accountIds -> do
+                let _foo = replayRewards accountIds
+                dumpAccountActivity accountIds
   where
     withMaybeFile mFilePath action =
       case mFilePath of

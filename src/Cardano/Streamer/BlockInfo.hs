@@ -327,6 +327,18 @@ readBlock fp =
     Left exc -> throwIO exc
     Right res -> pure res
 
+readTx ::
+  forall era m.
+  ( Era era
+  , DecCBOR (Annotator (Tx TopTx era))
+  , MonadIO m
+  ) =>
+  FilePath -> m ( Tx TopTx era)
+readTx fp =
+  liftIO (BSL.readFile fp) <&> decodeFullAnnotator (eraProtVerLow @era) "Tx" decCBOR >>= \case
+    Left exc -> throwIO exc
+    Right res -> pure res
+
 writeTx :: forall era m. (EraTx era, MonadIO m) => FilePath -> Tx TopTx era -> m ()
 writeTx fp = liftIO . BSL.writeFile fp . serialize (eraProtVerLow @era)
 

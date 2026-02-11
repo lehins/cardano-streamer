@@ -58,6 +58,7 @@ import Cardano.Ledger.BaseTypes (
 import Cardano.Ledger.Coin
 import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
+import Cardano.Ledger.TxIn
 import Cardano.Protocol.Crypto (StandardCrypto)
 import Cardano.Streamer.Time
 import Control.Monad.Trans.Except
@@ -76,7 +77,7 @@ import qualified Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import qualified Ouroboros.Consensus.Storage.ImmutableDB as ImmutableDB
 import qualified Ouroboros.Consensus.Storage.LedgerDB as LDB
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..), snapshotToDirName)
-import RIO as X hiding (RIO, runRIO, Memoized)
+import RIO as X hiding (Memoized, RIO, runRIO)
 import RIO.FilePath
 import qualified RIO.Text as T
 import RIO.Time
@@ -97,6 +98,7 @@ deriving instance ToField EpochNo
 deriving instance Aeson.ToJSONKey EpochNo
 
 deriving instance Display BlockNo
+deriving instance Display TxId
 
 instance ToField UTCTime where
   toField = BS8.pack . iso8601Show

@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -6,6 +7,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
@@ -16,6 +18,7 @@ module Cardano.Streamer.Ledger where
 import Cardano.Ledger.Alonzo.Scripts
 import Cardano.Ledger.Alonzo.Tx
 import Cardano.Ledger.Api.Era
+import Cardano.Ledger.Api.Tx
 import Cardano.Ledger.Babbage.Collateral (collOuts)
 import Cardano.Ledger.Babbage.Core
 import Cardano.Ledger.BaseTypes
@@ -92,6 +95,7 @@ class
   , EraCertState era
   , ToCBOR (NewEpochState era)
   , EncCBOR (NewEpochState era)
+  , AnyEraTx era
   ) =>
   EraApp era
   where
