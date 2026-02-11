@@ -145,8 +145,8 @@ advanceSlot (SlotInspector SlotInspection{..}) !bwi = do
   let
     slotNo = biSlotNo bwi
     era = blockCardanoEra block
-  blocksWriter (fst <$> bwi)
   (b, !prevExtLedgerState) <- siLedgerDbLookup a $ ledgerDbExtLedgerStateForBlock block
+  blocksWriter (fst <$> bwi) (Just block) (Just prevExtLedgerState)
   let
     extLedgerConfig = ExtLedgerCfg infoConfig
     epochNo = extLedgerStateEpochNo prevExtLedgerState
@@ -220,16 +220,19 @@ advanceSlot (SlotInspector SlotInspection{..}) !bwi = do
 
 blocksWriter ::
   (MonadReader (DbStreamerApp (CardanoBlock c)) m, MonadIO m) =>
-  BlockWithInfo LByteString -> m ()
-blocksWriter bwi@BlockWithInfo{biSlotNo, biBlockHeaderHash} = do
+  BlockWithInfo LByteString ->
+  Maybe (CardanoBlock StandardCrypto) ->
+  Maybe (ExtLedgerState (CardanoBlock StandardCrypto) ValuesMK) ->
+  m ()
+blocksWriter bwi@BlockWithInfo{biSlotNo, biBlockHeaderHash} mBlock mExtLedgerState = do
   app <- ask
   (blocksToWriteSlotSet, blocksToWriteBlockHashSet) <- readIORef (dsAppWriteBlocks app)
   when (biSlotNo `Set.member` blocksToWriteSlotSet) $ do
-    writeBlockWithState bwi Nothing Nothing
+    writeBlockWithState bwi mBlock mExtLedgerState
     atomicModifyIORef' (dsAppWriteBlocks app) $
       \(slotNoSet, blockHashSet) -> ((Set.delete biSlotNo slotNoSet, blockHashSet), ())
   when (biBlockHeaderHash `Set.member` blocksToWriteBlockHashSet) $ do
-    writeBlockWithState bwi Nothing Nothing
+    writeBlockWithState bwi mBlock mExtLedgerState
     atomicModifyIORef' (dsAppWriteBlocks app) $ \(slotNoSet, blockHashSet) ->
       ((slotNoSet, Set.delete biBlockHeaderHash blockHashSet), ())
 
