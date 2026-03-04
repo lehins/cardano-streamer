@@ -66,7 +66,7 @@ replayRewards accounts = do
       logError "Output directory is required for exporting rewards"
     Just outDir -> do
       let filePaths =
-            [ ( unAccountId (aaAccountId account)
+            [ ( unAccountId (aaId account)
               , outDir </> T.unpack (formatAccountAddress account) <.> "csv"
               )
             | account <- NE.toList accounts
@@ -91,7 +91,7 @@ replayRewards accounts = do
 
 dumpAccountActivity :: NonEmpty AccountAddress -> RIO App ()
 dumpAccountActivity (accAddress :| []) = do
-  let cred = unAccountId (aaAccountId accAddress)
+  let cred = unAccountId (aaId accAddress)
   mOutDir <- dsAppOutDir <$> ask
   case mOutDir of
     Nothing ->

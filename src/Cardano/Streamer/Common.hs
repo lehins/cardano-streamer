@@ -293,10 +293,10 @@ data Opts = Opts
   deriving (Show)
 
 formatAccountAddress :: AccountAddress -> Text
-formatAccountAddress AccountAddress{aaNetworkId, aaAccountId} =
+formatAccountAddress AccountAddress{aaNetworkId, aaId} =
   either (error . show) A.bech32 $
     A.stakeAddress discriminant $
-      credentialToDelegation (unAccountId aaAccountId)
+      credentialToDelegation (unAccountId aaId)
   where
     discriminant = A.NetworkTag $ fromIntegral @Word8 @Word32 $ networkToWord8 aaNetworkId
     credentialToDelegation = \case

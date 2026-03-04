@@ -352,7 +352,7 @@ filterBlockWithdrawals creds =
       map
         ( \tx ->
             let wdrls =
-                  Map.mapKeys (unAccountId . aaAccountId) $
+                  Map.mapKeys (unAccountId . aaId) $
                     unWithdrawals (tx ^. bodyTxL . withdrawalsTxBodyL)
              in wdrls `Map.restrictKeys` creds
         )

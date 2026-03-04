@@ -247,7 +247,7 @@ addAccountActivity cred !accountActivity swb =
     accTxsAccountActivity !acc (txIx, tx) =
       let acc' = foldl' (addFromCerts (toBinTx txIx tx)) acc (tx ^. bodyTxL . certsTxBodyL)
        in foldl' (addCredTx (toBinTx txIx tx)) acc' $
-            map (unAccountId . aaAccountId) $
+            map (unAccountId . aaId) $
               Map.keys (unWithdrawals (tx ^. bodyTxL . withdrawalsTxBodyL))
     toBinTx ::
       forall era.
