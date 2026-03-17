@@ -55,8 +55,8 @@ package HsOpenSSL
 source-repository-package
   type: git
   location: https://github.com/IntersectMBO/cardano-api
-  tag: c409f34bb2681d3224da88dbadfb4a415824261b
-  --sha256: sha256-rzW9XWN5qSSLOT3zVUf2hvT7BqiyfNzvTyBopP5KbSE=
+  tag: 22328f326cf362ce69f2f26790f6cdc87f2f16e3
+  --sha256: sha256-lO8PROKkaLgw3VGdhyenDH3l71iPp9z7mConGveBz5I=
   subdir:
     cardano-api
 
