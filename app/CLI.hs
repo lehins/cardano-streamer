@@ -202,6 +202,12 @@ commandParser =
             "rewards"
             (info rewardsCommandParser (progDesc "Calculate Rewards and Wthdrawals per Epoch"))
       )
+    <|> subparser
+      ( metavar "dump-snapshot"
+          <> command
+            "dump-snapshot"
+            (info (pure DumpSnapshot) (progDesc "Dump ledger snapshot as JSON"))
+      )
 
 rewardsCommandParser :: Parser Command
 rewardsCommandParser =

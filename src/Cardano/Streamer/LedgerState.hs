@@ -18,6 +18,7 @@ module Cardano.Streamer.LedgerState (
   readNewEpochState,
   encodeNewEpochState,
   applyNonByronNewEpochState,
+  applyConwayNewEpochState,
   applyNewEpochState,
   modifyLedgerState,
   applyTickedNewEpochStateWithBlock,
@@ -102,6 +103,8 @@ import Data.SOP.Telescope
 import Ouroboros.Consensus.Byron.ByronHFC ()
 import Ouroboros.Consensus.Byron.Ledger.Block
 import Ouroboros.Consensus.Byron.Ledger.Ledger
+import Cardano.Ledger.Conway.Governance (ConwayEraGov)
+import Cardano.Ledger.Conway.State (ConwayEraCertState)
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Config (TopLevelConfig (..))
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
@@ -580,6 +583,16 @@ applyNonByronNewEpochState ::
   ExtLedgerState (CardanoBlock c) mk ->
   Maybe a
 applyNonByronNewEpochState f = applyNewEpochState (const Nothing) (\_ -> Just . f)
+
+applyConwayNewEpochState ::
+  (forall era. (ConwayEraGov era, ConwayEraCertState era) => NewEpochState era -> a) ->
+  ExtLedgerState (CardanoBlock c) mk ->
+  Maybe a
+applyConwayNewEpochState f extLedgerState =
+  case ledgerState extLedgerState of
+    LedgerStateConway ls -> Just $ f (shelleyLedgerState ls)
+    LedgerStateDijkstra ls -> Just $ f (shelleyLedgerState ls)
+    _ -> Nothing
 
 applyTickedNewEpochState ::
   (TransitionInfo -> ChainValidationState -> a) ->

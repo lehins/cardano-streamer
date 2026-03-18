@@ -242,6 +242,7 @@ data Command
   | Benchmark
   | Stats
   | ComputeRewards (NonEmpty RewardAccount)
+  | DumpSnapshot
   deriving (Show)
 
 instance Display Command where
@@ -250,6 +251,7 @@ instance Display Command where
     Benchmark -> "Benchmark"
     Stats -> "Compute Statistics"
     ComputeRewards _xs -> "Compute Rewards" -- for: " <> intersperce "," (map displayShow xs)
+    DumpSnapshot -> "Dump Snapshot"
 
 newtype BlockHashOrSlotNo = BlockHashOrSlotNo
   {unBlockHashOrSlotNo :: Either SlotNo (Hash HASH EraIndependentBlockHeader)}
