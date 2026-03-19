@@ -92,31 +92,48 @@ immutable chain is used.
 |-------|------|-------------|
 | `epoch` | integer | Epoch number |
 | `snapshotEraName` | string | Name of the era at the snapshot point |
+| `epochNonce` | string \| null | Epoch nonce (η₀) used for slot-leader VRF verification. Hex-encoded Blake2b-256 hash, or `null` for the neutral nonce or Byron era. |
 | `protocolParams` | object | Protocol parameters relevant to reward calculations (see below) |
 | `activeStake` | integer | Total lovelace delegated in the **go** snapshot (lovelace) |
-| `eta` | number | Epoch performance multiplier: `min(1, blocksMade / expectedBlocks)`. Set to 1 when `d ≥ 0.8` |
+| `eta` | object \| null | Epoch performance multiplier as exact rational `{"numerator": n, "denominator": d}`, representing `min(1, blocksMade / expectedBlocks)`. Set to `{"numerator": 1, "denominator": 1}` when `d ≥ 0.8`. `null` when genesis globals are unavailable. |
 | `expectedBlocks` | integer | Number of blocks expected this epoch: `(1 - d) * f * epochSize` |
-| `rupdNext` | object | Reward update for the **next** epoch transition (see below) |
+| `rupdNext` | object | Reward update computed for the **next** epoch transition (see below) |
+| `rupdApplied` | object \| null | Reward update that was **applied at this epoch boundary** (i.e., the `rupdNext` from the previous epoch). `null` for the first epoch or when not available. |
 | `treasury` | integer | Current treasury balance (lovelace) |
 | `reserves` | integer | Current reserves balance (lovelace) |
 | `totalPools` | integer | Number of pools in the current pool distribution |
-| `poolDistribution` | array | Per-pool stake fractions for the current epoch |
+| `poolDistribution` | array | Per-pool stake fractions for the current epoch (see below) |
 | `epochFees` | integer | Fees collected during the previous epoch (lovelace); feeds into `rPot` |
+| `totalStake` | integer | Total lovelace in circulation: `maxLovelaceSupply - reserves`. `null` if genesis globals are unavailable. |
 | `deposits` | object | Outstanding deposit obligations: `stakeKey`, `pool`, `dRep`, `proposal`, `total` (lovelace) |
 | `instantaneousRewards` | object | Pending MIR transfers queued for the next epoch boundary (Shelley–Babbage only; always empty in Conway+). Fields: `iRReserves`, `iRTreasury` (credential→lovelace maps), `deltaReserves`, `deltaTreasury` (DeltaCoin adjustments). |
+| `conwayGov` | object \| null | Conway governance state (see below). `null` for pre-Conway eras. |
 | `snapshots` | object | The three stake snapshots: `mark` (N+1), `set` (N), `go` (N-1) |
 
 ##### `protocolParams`
 
+All rational fields are encoded as exact fractions `{"numerator": n, "denominator": d}` to avoid floating-point rounding errors.
+
 | Field | Description |
 |-------|-------------|
-| `rho` | Monetary expansion rate |
-| `tau` | Treasury expansion rate |
-| `d` | Decentralisation parameter (0 = fully decentralised) |
-| `a0` | Pool pledge influence |
+| `rho` | Monetary expansion rate (exact rational) |
+| `tau` | Treasury expansion rate (exact rational) |
+| `d` | Decentralisation parameter (exact rational; 0 = fully decentralised) |
+| `a0` | Pool pledge influence (exact rational) |
 | `nOpt` | Desired number of pools (k parameter, used for saturation) |
 | `minPoolCost` | Minimum pool operating cost (lovelace) |
 | `protocolVersion` | `{ major, minor }` |
+
+##### `poolDistribution` entries
+
+Each entry in the `poolDistribution` array has:
+
+| Field | Description |
+|-------|-------------|
+| `poolId` | Pool key hash (hex) |
+| `stake` | Pool's fractional stake as exact rational `{"numerator": n, "denominator": d}` |
+| `stakeLovelace` | Pool's total delegated stake in lovelace (integer, includes proposal deposits) |
+| `stakePercent` | Pool's stake as a percentage (approximate floating-point, for display only) |
 
 ##### `rupdNext`
 
@@ -154,6 +171,18 @@ Each of `mark`, `set`, and `go` contains:
 | `delegations` | Map of stake credential → pool ID |
 | `poolParams` | Map of pool ID → pool registration parameters |
 | `blocks` | Map of pool ID → blocks made this epoch (**mark** uses `nesBcur`; **go** uses `nesBprev`; **set** omits this field because the epoch N-2 block data is no longer retained) |
+
+##### `conwayGov`
+
+Present only in Conway and later eras. The DRep pulser is forced to completion before extracting this data.
+
+| Field | Description |
+|-------|-------------|
+| `drepDistr` | Map of DRep credential/sentinel → lovelace stake; produced by forcing the DRep pulser to completion |
+| `committee` | Currently enacted Constitutional Committee: member credentials with their expiry epochs and the threshold required for valid votes |
+| `constitution` | Currently enacted Constitution: anchor (URL + hash) and optional guardrail script hash |
+| `committeeState` | Hot key authorizations and resignations for CC members (maps cold credential → hot credential status) |
+| `nextEnactState` | Ratified governance state queued for enactment at the next epoch boundary. Includes `committee`, `constitution`, `curPParams`, `prevPParams`, `treasury` (pending withdrawals), and `prevGovActionIds` (last enacted action ID per proposal category) |
 
 ### Benchmarking
 
