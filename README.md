@@ -88,6 +88,8 @@ immutable chain is used.
 
 #### JSON schema
 
+For `dump-epoch-snapshots`, each file is written at the first block of the new epoch rather than at the bare boundary slot; all epoch-boundary transitions (reward distribution, treasury/reserve updates, snapshot rotation) have already been applied, so all fields reflect the post-boundary state.
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `epoch` | integer | Epoch number |

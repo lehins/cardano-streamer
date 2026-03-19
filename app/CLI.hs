@@ -208,6 +208,20 @@ commandParser =
             "dump-snapshot"
             (info (pure DumpSnapshot) (progDesc "Dump ledger snapshot as JSON"))
       )
+    <|> subparser
+      ( metavar "dump-epoch-snapshots"
+          <> command
+            "dump-epoch-snapshots"
+            ( info
+                (pure DumpEpochSnapshots)
+                ( progDesc $
+                    mconcat
+                      [ "Replay the chain from --start-slot to tip, writing one JSON snapshot "
+                      , "file per epoch to --out-dir at the first block of each new epoch."
+                      ]
+                )
+            )
+      )
 
 rewardsCommandParser :: Parser Command
 rewardsCommandParser =

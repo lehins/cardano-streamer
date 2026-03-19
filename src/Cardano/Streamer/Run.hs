@@ -24,7 +24,7 @@ import Cardano.Ledger.BaseTypes (
   maxLovelaceSupply,
   securityParameter,
   )
-import Cardano.Ledger.Slot (EpochSize (..), epochInfoSize)
+import Cardano.Ledger.Slot (EpochSize (..), SlotNo (..), epochInfoSize)
 import Cardano.Ledger.Coin (Coin (..), DeltaCoin (..))
 import Cardano.Ledger.Compactible (fromCompact)
 import Cardano.Ledger.Core (
@@ -47,18 +47,32 @@ import Cardano.Ledger.Conway.State (ConwayEraCertState, certVStateL, vsCommittee
 import Cardano.Ledger.Shelley.RewardUpdate (PulsingRewUpdate (..), RewardSnapShot (..), RewardUpdate (..))
 import Cardano.Ledger.Hashes (unKeyHash)
 import Cardano.Crypto.Hash.Class (hashToTextAsHex)
-import Cardano.Ledger.PoolDistr (PoolDistr (..))
-import qualified Cardano.Ledger.PoolDistr as PD
-import Cardano.Ledger.Shelley.API (SnapShot (..), SnapShots (..), Stake (..))
+import Cardano.Ledger.Shelley.API (SnapShot (..), SnapShots (..))
 import Cardano.Ledger.Shelley.LedgerState
-import Cardano.Ledger.State (Obligations (..), obligationCertState, obligationGovState, sumAllStake, sumObligation)
-import qualified Data.VMap as VMap
+import Cardano.Ledger.State (
+  IndividualPoolStake (..),
+  Obligations (..),
+  PoolDistr (..),
+  chainAccountStateL,
+  casTreasuryL,
+  casReservesL,
+  individualPoolStake,
+  individualTotalPoolStake,
+  obligationCertState,
+  obligationGovState,
+  sumAllStake,
+  sumObligation,
+  unPoolDistr,
+  )
 import Cardano.Streamer.Benchmark
 import Cardano.Streamer.Common
 import Cardano.Streamer.Inspection
 import Cardano.Streamer.LedgerState
 import Cardano.Streamer.Producer
 import Cardano.Streamer.ProtocolInfo
+import Cardano.Protocol.Crypto (StandardCrypto)
+import Ouroboros.Consensus.Cardano.Block (CardanoBlock)
+import Ouroboros.Consensus.Config (TopLevelConfig)
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import Cardano.Streamer.RTS
 import Cardano.Streamer.Rewards
@@ -71,11 +85,12 @@ import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import Data.Char (toLower)
 import qualified Data.List.NonEmpty as NE
-import Control.Monad.Trans.Reader (runReaderT)
 import Data.Functor.Identity (runIdentity)
+import Control.Monad.Trans.Reader (runReaderT)
+import Data.Ratio (denominator, numerator, (%))
 import qualified Data.Map.Strict as Map
 import Lens.Micro ((^.))
-import Ouroboros.Consensus.Ledger.Extended (ledgerState)
+import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState, ledgerState)
 import Ouroboros.Consensus.Shelley.Ledger.Ledger (shelleyLedgerState)
 import Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
@@ -107,21 +122,30 @@ replayEpochStats = do
   writeNamedCsv "EpochStats" (epochStatsToNamedCsv epochStats)
   logInfo $ "Final summary: \n    " <> display (fold $ unEpochStats epochStats)
 
-dumpLedgerSnapshot :: RIO App ()
-dumpLedgerSnapshot = do
-  extLedgerState <- ledgerDbTipExtLedgerState
-  app <- ask
+-- | Encode a Rational exactly as {"numerator": n, "denominator": d}.
+rationalToJson :: Rational -> Aeson.Value
+rationalToJson r =
+  Aeson.object
+    [ "numerator" Aeson..= numerator r
+    , "denominator" Aeson..= denominator r
+    ]
+
+-- | Build the JSON snapshot for a given ledger state.
+-- Returns Nothing for Byron.
+-- Returns Just (fullJson, rupdNext) where rupdNext should be threaded to the
+-- next epoch's call as mRupdApplied (it is the reward update that will be
+-- applied at that epoch boundary).
+buildSnapshotJson ::
+  TopLevelConfig (CardanoBlock StandardCrypto) ->
+  Maybe Aeson.Value ->
+  ExtLedgerState (CardanoBlock StandardCrypto) mk ->
+  Maybe (Aeson.Value, Aeson.Value)
+buildSnapshotJson topLevelConfig mRupdApplied extLedgerState =
   let eraName = show $ extLedgerStateCardanoEra extLedgerState
-      mGlobals =
-        globalsFromLedgerConfig
-          (extLedgerStateCardanoEra extLedgerState)
-          extLedgerState
-          (pInfoConfig (dsAppProtocolInfo app))
+      mGlobals = globalsFromLedgerConfig (extLedgerStateCardanoEra extLedgerState) extLedgerState topLevelConfig
       mConwayGov = applyConwayNewEpochState extractConwayGovData extLedgerState
-      maybeData = applyNonByronNewEpochState (extractSnapshotData eraName mGlobals mConwayGov) extLedgerState
-  case maybeData of
-    Just snapshotData -> liftIO $ BSL.putStrLn $ Aeson.encode snapshotData
-    Nothing -> logError "Cannot dump Byron era snapshot"
+      mEpochNonce = extLedgerStateEpochNonce extLedgerState
+   in applyNonByronNewEpochState (extractSnapshotData eraName mGlobals mConwayGov mRupdApplied mEpochNonce) extLedgerState
   where
     extractConwayGovData ::
       (ConwayEraGov era, ConwayEraCertState era) => NewEpochState era -> Aeson.Value
@@ -141,79 +165,93 @@ dumpLedgerSnapshot = do
             , "nextEnactState" Aeson..= nextEnactState
             ]
 
-    extractSnapshotData eraName mGlobals mConwayGov nes =
+    -- Returns (fullJson, rupdData) where rupdData is threaded to the next epoch.
+    extractSnapshotData eraName mGlobals mConwayGov mPrevRupd mEpochNonce nes =
       let epochNum = case nesEL nes of EpochNo n -> n
           epochState = nesEs nes
           poolDistr = nesPd nes
-          accountState = epochState ^. esAccountStateL
-          treasuryAmt = unCoin $ accountState ^. asTreasuryL
-          reservesAmt = unCoin $ accountState ^. asReservesL
+          treasuryAmt = unCoin $ epochState ^. chainAccountStateL . casTreasuryL
+          reservesAmt = unCoin $ epochState ^. chainAccountStateL . casReservesL
 
           -- Extract all 3 snapshots (mark, set, go) and fees
           SnapShots {ssStakeMark = markSnap, ssStakeSet = setSnap, ssStakeGo = goSnap, ssFee = feeCoin} = epochState ^. esSnapshotsL
           fees = unCoin feeCoin
 
           -- Extract deposit obligations
-          obligations = obligationCertState (epochState ^. esLStateL . lsCertStateL)
-                     <> obligationGovState (nes ^. newEpochStateGovStateL)
+          obligations =
+            obligationCertState (epochState ^. esLStateL . lsCertStateL)
+              <> obligationGovState (nes ^. newEpochStateGovStateL)
 
-          -- Extract reward update data, forcing the pulser to completion if needed.
-          -- For SNothing (before stability point), synthesize via startStep.
+          sumRs m =
+            sum
+              [ unCoin (rewardAmount r)
+              | rs_set <- Map.elems m
+              , r <- Set.toList rs_set
+              ] :: Integer
+
+          fromPulsing globals rewsnap@RewardSnapShot {..} pulser =
+            let Coin rPot' = rewFees <> rewDeltaR1
+                (RewardUpdate {rs = forcedRs}, _) =
+                  runIdentity $ runReaderT (completeRupd (Pulsing rewsnap pulser)) globals
+                totalDistributed = sumRs forcedRs
+                deltaR2 = unCoin rewR - totalDistributed
+             in Aeson.object
+                  [ "deltaR1" Aeson..= unCoin rewDeltaR1
+                  , "deltaR2" Aeson..= deltaR2
+                  , "deltaT1" Aeson..= unCoin rewDeltaT1
+                  , "rPot" Aeson..= rPot'
+                  , "rewardPot" Aeson..= unCoin rewR
+                  , "totalDistributed" Aeson..= totalDistributed
+                  ]
+
           rupdData =
-            let sumRs m =
-                  sum
-                    [ unCoin (rewardAmount r)
-                    | rs_set <- Map.elems m
-                    , r <- Set.toList rs_set
-                    ] :: Integer
-                fromPulsing globals rewsnap@RewardSnapShot {..} pulser =
-                  let Coin rPot' = rewFees <> rewDeltaR1
-                      (RewardUpdate {rs = forcedRs}, _) =
-                        runIdentity $ runReaderT (completeRupd (Pulsing rewsnap pulser)) globals
-                      totalDistributed = sumRs forcedRs
-                      deltaR2 = unCoin rewR - totalDistributed
-                   in Aeson.object
-                        [ "deltaR1" Aeson..= unCoin rewDeltaR1
-                        , "deltaR2" Aeson..= deltaR2
-                        , "deltaT1" Aeson..= unCoin rewDeltaT1
-                        , "rPot" Aeson..= rPot'
-                        , "rewardPot" Aeson..= unCoin rewR
-                        , "totalDistributed" Aeson..= totalDistributed
-                        ]
-             in case (nesRu nes, mGlobals) of
-                  (SJust (Complete RewardUpdate {..}), _) ->
-                    let DeltaCoin deltaT1 = deltaT
-                        DeltaCoin deltaRCombined = deltaR
-                     in Aeson.object
-                          [ "deltaT1" Aeson..= deltaT1
-                          , "deltaR" Aeson..= deltaRCombined
-                          , "totalDistributed" Aeson..= sumRs rs
-                          ]
-                  (_, Nothing) -> Aeson.Null
-                  (SJust (Pulsing rewsnap pulser), Just globals) ->
-                    fromPulsing globals rewsnap pulser
-                  (SNothing, Just globals) ->
-                    let pulsing =
-                          startStep
-                            (epochInfoSize (epochInfoPure globals) (nesEL nes))
-                            (nesBprev nes)
-                            (nesEs nes)
-                            (Coin $ fromIntegral $ maxLovelaceSupply globals)
-                            (activeSlotCoeff globals)
-                            (securityParameter globals)
-                     in case pulsing of
-                          Pulsing rewsnap pulser -> fromPulsing globals rewsnap pulser
-                          Complete RewardUpdate {..} ->
-                            Aeson.object ["totalDistributed" Aeson..= sumRs rs]
+            case (nesRu nes, mGlobals) of
+              (SJust (Complete RewardUpdate {..}), _) ->
+                let DeltaCoin deltaT1 = deltaT
+                    DeltaCoin deltaRCombined = deltaR
+                 in Aeson.object
+                      [ "deltaT1" Aeson..= deltaT1
+                      , "deltaR" Aeson..= deltaRCombined
+                      , "totalDistributed" Aeson..= sumRs rs
+                      ]
+              (_, Nothing) -> Aeson.Null
+              (SJust (Pulsing rewsnap pulser), Just globals) ->
+                fromPulsing globals rewsnap pulser
+              (SNothing, Just globals) ->
+                let pulsing =
+                      startStep
+                        (epochInfoSize (epochInfoPure globals) (nesEL nes))
+                        (nesBprev nes)
+                        (nesEs nes)
+                        (Coin $ fromIntegral $ maxLovelaceSupply globals)
+                        (activeSlotCoeff globals)
+                        (securityParameter globals)
+                 in case pulsing of
+                      Pulsing rewsnap pulser -> fromPulsing globals rewsnap pulser
+                      Complete RewardUpdate {..} ->
+                        Aeson.object ["totalDistributed" Aeson..= sumRs rs]
 
-          -- Protocol parameters relevant to reward/treasury calculation
+          -- Eta: performance multiplier. Computed the same way the ledger does
+          -- in startStep: if d >= 0.8 then 1, otherwise blocksMade/expectedBlocks.
+          -- (RewardSnapShot does not store eta, so we derive it from nesBprev.)
+          mEta = mGlobals <&> \globals ->
+            let d = unboundRational (pr ^. ppDG)
+                EpochSize slots = epochInfoSize (epochInfoPure globals) (nesEL nes)
+                n = floor $ (1 - d) * unboundRational (activeSlotVal (activeSlotCoeff globals)) * fromIntegral slots :: Integer
+                BlocksMade bm = nesBprev nes
+                blocksMade = fromIntegral $ Map.foldl' (+) 0 bm :: Integer
+             in if d >= 0.8 || n == 0
+                  then 1 :: Rational
+                  else blocksMade % n
+
+          -- Protocol parameters: encoded as exact rationals, not Double
           pr = epochState ^. prevPParamsEpochStateL
           protoParams =
             Aeson.object
-              [ "rho" Aeson..= (fromRational (unboundRational (pr ^. ppRhoL)) :: Double)
-              , "tau" Aeson..= (fromRational (unboundRational (pr ^. ppTauL)) :: Double)
-              , "d" Aeson..= (fromRational (unboundRational (pr ^. ppDG)) :: Double)
-              , "a0" Aeson..= (fromRational (unboundRational (pr ^. ppA0L)) :: Double)
+              [ "rho" Aeson..= rationalToJson (unboundRational (pr ^. ppRhoL))
+              , "tau" Aeson..= rationalToJson (unboundRational (pr ^. ppTauL))
+              , "d" Aeson..= rationalToJson (unboundRational (pr ^. ppDG))
+              , "a0" Aeson..= rationalToJson (unboundRational (pr ^. ppA0L))
               , "nOpt" Aeson..= (pr ^. ppNOptL)
               , "minPoolCost" Aeson..= unCoin (pr ^. ppMinPoolCostL)
               , "protocolVersion" Aeson..= (pr ^. ppProtocolVersionL)
@@ -230,40 +268,31 @@ dumpLedgerSnapshot = do
           instantaneousRewards =
             epochState ^. esLStateL . lsCertStateL . certDStateL . dsIRewardsL
 
-          -- Eta (performance multiplier) and expected blocks
-          etaAndExpected = mGlobals <&> \globals ->
+          -- expectedBlocks is derived from genesis/pparams; eta comes from the pulser
+          mExpectedBlocks = mGlobals <&> \globals ->
             let d = unboundRational (pr ^. ppDG)
                 EpochSize slots = epochInfoSize (epochInfoPure globals) (nesEL nes)
                 asc = activeSlotCoeff globals
-                expectedBlocks =
-                  floor $ (1 - d) * unboundRational (activeSlotVal asc) * fromIntegral slots :: Integer
-                blocksMadeCount =
-                  fromIntegral $ Map.foldr (+) 0 (unBlocksMade (nesBprev nes)) :: Integer
-                eta :: Double
-                eta
-                  | d >= 0.8 = 1.0
-                  | expectedBlocks == 0 = 1.0
-                  | otherwise = fromIntegral blocksMadeCount / fromIntegral expectedBlocks
-             in (eta, expectedBlocks)
+             in floor $ (1 - d) * unboundRational (activeSlotVal asc) * fromIntegral slots :: Integer
 
-          poolMap = PD.unPoolDistr poolDistr
-          totalStakeRational = sum [PD.individualPoolStake pd | pd <- Map.elems poolMap]
+          -- Pool distribution: stake as exact rational + exact lovelace count.
+          -- The fractions in PoolDistr sum to exactly 1 by ledger construction,
+          -- so stakePercent is simply stakeRational * 100.
+          poolMap = unPoolDistr poolDistr
           poolCount = Map.size poolMap
           poolEntries = map mkPoolEntry (Map.toList poolMap)
             where
               mkPoolEntry (pid, poolData) =
-                let stakeRational = PD.individualPoolStake poolData
-                    percent =
-                      if totalStakeRational > 0
-                        then fromRational (stakeRational / totalStakeRational * 100) :: Double
-                        else 0
+                let stakeRational = individualPoolStake poolData
+                    stakeLovelace = unCoin $ fromCompact (individualTotalPoolStake poolData)
+                    stakePercent = fromRational (stakeRational * 100) :: Double
                  in Aeson.object
-                      [ "poolId" Aeson..= hashToTextAsHex (unKeyHash pid),
-                        "stake" Aeson..= (fromRational stakeRational :: Double),
-                        "stakePercent" Aeson..= percent
+                      [ "poolId" Aeson..= hashToTextAsHex (unKeyHash pid)
+                      , "stake" Aeson..= rationalToJson stakeRational
+                      , "stakeLovelace" Aeson..= (stakeLovelace :: Integer)
+                      , "stakePercent" Aeson..= stakePercent
                       ]
 
-          -- Helper to extract full snapshot data for comparison
           snapshotInfo name mBlocks snap =
             Aeson.object $
               [ "name" Aeson..= (name :: String)
@@ -273,35 +302,85 @@ dumpLedgerSnapshot = do
               ]
                 ++ ["blocks" Aeson..= b | Just b <- [mBlocks]]
 
-       in Aeson.object
-            [ "epoch" Aeson..= (fromIntegral epochNum :: Integer),
-              "snapshotEraName" Aeson..= eraName,
-              "protocolParams" Aeson..= protoParams,
-              "totalStake" Aeson..= totalStake,
-              "activeStake" Aeson..= activeStake,
-              "eta" Aeson..= fmap fst etaAndExpected,
-              "expectedBlocks" Aeson..= fmap snd etaAndExpected,
-              "rupdNext" Aeson..= rupdData,
-              "treasury" Aeson..= treasuryAmt,
-              "reserves" Aeson..= reservesAmt,
-              "totalPools" Aeson..= poolCount,
-              "poolDistribution" Aeson..= poolEntries,
-              "epochFees" Aeson..= fees,
-              "deposits" Aeson..= Aeson.object
-                [ "stakeKey" Aeson..= unCoin (oblStake obligations)
-                , "pool" Aeson..= unCoin (oblPool obligations)
-                , "dRep" Aeson..= unCoin (oblDRep obligations)
-                , "proposal" Aeson..= unCoin (oblProposal obligations)
-                , "total" Aeson..= unCoin (sumObligation obligations)
-                ],
-              "instantaneousRewards" Aeson..= instantaneousRewards,
-              "conwayGov" Aeson..= mConwayGov,
-              "snapshots" Aeson..= Aeson.object
-                [ "mark" Aeson..= snapshotInfo "mark" (Just (nesBcur nes)) markSnap
-                , "set" Aeson..= snapshotInfo "set" (Nothing :: Maybe BlocksMade) setSnap
-                , "go" Aeson..= snapshotInfo "go" (Just (nesBprev nes)) goSnap
-                ]
-            ]
+          json =
+            Aeson.object
+              [ "epoch" Aeson..= (fromIntegral epochNum :: Integer)
+              , "snapshotEraName" Aeson..= eraName
+              , "epochNonce" Aeson..= mEpochNonce
+              , "protocolParams" Aeson..= protoParams
+              , "totalStake" Aeson..= totalStake
+              , "activeStake" Aeson..= activeStake
+              , "eta" Aeson..= fmap rationalToJson mEta
+              , "expectedBlocks" Aeson..= mExpectedBlocks
+              , "rupdNext" Aeson..= rupdData
+              , "rupdApplied" Aeson..= mPrevRupd
+              , "treasury" Aeson..= treasuryAmt
+              , "reserves" Aeson..= reservesAmt
+              , "totalPools" Aeson..= poolCount
+              , "poolDistribution" Aeson..= poolEntries
+              , "epochFees" Aeson..= fees
+              , "deposits"
+                  Aeson..= Aeson.object
+                    [ "stakeKey" Aeson..= unCoin (oblStake obligations)
+                    , "pool" Aeson..= unCoin (oblPool obligations)
+                    , "dRep" Aeson..= unCoin (oblDRep obligations)
+                    , "proposal" Aeson..= unCoin (oblProposal obligations)
+                    , "total" Aeson..= unCoin (sumObligation obligations)
+                    ]
+              , "instantaneousRewards" Aeson..= instantaneousRewards
+              , "conwayGov" Aeson..= mConwayGov
+              , "snapshots"
+                  Aeson..= Aeson.object
+                    [ "mark" Aeson..= snapshotInfo "mark" (Just (nesBcur nes)) markSnap
+                    , "set" Aeson..= snapshotInfo "set" (Nothing :: Maybe BlocksMade) setSnap
+                    , "go" Aeson..= snapshotInfo "go" (Just (nesBprev nes)) goSnap
+                    ]
+              ]
+       in (json, rupdData)
+
+dumpLedgerSnapshot :: RIO App ()
+dumpLedgerSnapshot = do
+  extLedgerState <- ledgerDbTipExtLedgerState
+  app <- ask
+  case buildSnapshotJson (pInfoConfig (dsAppProtocolInfo app)) Nothing extLedgerState of
+    Just (snapshotData, _) -> liftIO $ BSL.putStrLn $ Aeson.encode snapshotData
+    Nothing -> logError "Cannot dump Byron era snapshot"
+
+dumpEpochSnapshots :: RIO App ()
+dumpEpochSnapshots = do
+  app <- ask
+  outDir <-
+    maybe (throwString "--out-dir is required for dump-epoch-snapshots") pure
+      =<< asks dsAppOutDir
+  prevRupdRef <- newIORef Nothing
+  let topLevelConfig = pInfoConfig (dsAppProtocolInfo app)
+      snapshotInspection =
+        noInspection
+          { siFinal = \swb _ _ _ _ _ ->
+              when (isFirstSlotOfNewEpoch swb) $ do
+                prevRupd <- readIORef prevRupdRef
+                -- We use the post-block state (DiffMK) rather than the bare
+                -- epoch-boundary state. This is safe because buildSnapshotJson reads
+                -- exclusively from NewEpochState fields (epoch number, treasury,
+                -- reserves, snapshots, pool distribution, protocol params, reward
+                -- update) — none of which are part of the UTxO table, so the
+                -- unapplied DiffMK diffs are irrelevant.
+                -- INVARIANT: do not add snapshot fields that read from the UTxO
+                -- (esUTxOState / utxosUtxo) without switching to a ValuesMK state.
+                let mResult = buildSnapshotJson topLevelConfig prevRupd (swbNewExtLedgerState swb)
+                forM_ mResult $ \(json, rupdNext) -> do
+                  writeIORef prevRupdRef (Just rupdNext)
+                  let epochStr = show (unEpochNo (swbEpochNo swb))
+                      slotStr = show (unSlotNo (swbSlotNo swb))
+                      fp = outDir </> epochStr <> "-" <> slotStr <> ".json"
+                  liftIO $ BSL.writeFile fp (Aeson.encode json)
+                  logInfo $
+                    "Dumped epoch "
+                      <> display (swbEpochNo swb)
+                      <> " snapshot to: "
+                      <> display (T.pack fp)
+          }
+  runConduit $ sourceBlocksWithInspector_ (SlotInspector snapshotInspection) .| sinkNull
 
 replayRewards :: NE.NonEmpty RewardAccount -> RIO App ()
 replayRewards accounts = do
@@ -414,6 +493,7 @@ runApp Opts {..} = do
               Stats -> replayEpochStats
               ComputeRewards accountIds -> replayRewards accountIds
               DumpSnapshot -> dumpLedgerSnapshot
+              DumpEpochSnapshots -> dumpEpochSnapshots
   where
     withMaybeFile mFilePath action =
       case mFilePath of
