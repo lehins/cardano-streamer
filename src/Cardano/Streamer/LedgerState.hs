@@ -18,6 +18,7 @@ module Cardano.Streamer.LedgerState (
   readNewEpochState,
   encodeNewEpochState,
   applyNonByronNewEpochState,
+  applyConwayNewEpochState,
   applyNewEpochState,
   modifyLedgerState,
   applyTickedNewEpochStateWithBlock,
@@ -29,6 +30,7 @@ module Cardano.Streamer.LedgerState (
   writeNewEpochState,
   extLedgerStateCardanoEra,
   extLedgerStateEpochNo,
+  extLedgerStateEpochNonce,
   extractLedgerEvents,
   readGenesis,
   mkGlobals,
@@ -102,6 +104,8 @@ import Data.SOP.Telescope
 import Ouroboros.Consensus.Byron.ByronHFC ()
 import Ouroboros.Consensus.Byron.Ledger.Block
 import Ouroboros.Consensus.Byron.Ledger.Ledger
+import Cardano.Ledger.Conway.Governance (ConwayEraGov)
+import Cardano.Ledger.Conway.State (ConwayEraCertState)
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.Config (TopLevelConfig (..))
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (
@@ -131,7 +135,9 @@ import Ouroboros.Consensus.Shelley.Ledger.Block
 import Ouroboros.Consensus.Shelley.Ledger.Ledger
 import Ouroboros.Consensus.Shelley.Ledger.SupportsProtocol ()
 import Ouroboros.Consensus.Shelley.ShelleyHFC ()
-import Ouroboros.Consensus.TypeFamilyWrappers (WrapLedgerEvent (..), WrapTipInfo (..))
+import Cardano.Protocol.TPraos.API (ChainDepState (csTickn))
+import Cardano.Protocol.TPraos.Rules.Tickn (TicknState (ticknStateEpochNonce))
+import Ouroboros.Consensus.TypeFamilyWrappers (WrapChainDepState (..), WrapLedgerEvent (..), WrapTipInfo (..))
 import qualified RIO.Map as Map
 import qualified RIO.Text as T
 
@@ -581,6 +587,16 @@ applyNonByronNewEpochState ::
   Maybe a
 applyNonByronNewEpochState f = applyNewEpochState (const Nothing) (\_ -> Just . f)
 
+applyConwayNewEpochState ::
+  (forall era. (ConwayEraGov era, ConwayEraCertState era) => NewEpochState era -> a) ->
+  ExtLedgerState (CardanoBlock c) mk ->
+  Maybe a
+applyConwayNewEpochState f extLedgerState =
+  case ledgerState extLedgerState of
+    LedgerStateConway ls -> Just $ f (shelleyLedgerState ls)
+    LedgerStateDijkstra ls -> Just $ f (shelleyLedgerState ls)
+    _ -> Nothing
+
 applyTickedNewEpochState ::
   (TransitionInfo -> ChainValidationState -> a) ->
   (forall era. EraApp era => TransitionInfo -> NewEpochState era -> a) ->
@@ -657,6 +673,27 @@ extLedgerStateEpochNo =
   applyNewEpochState
     (EpochNo . Byron.getEpochNumber . Byron.currentEpoch . Byron.cvsUpdateState)
     (const nesEL)
+
+-- | Extract the epoch nonce (η₀) from the current era's chain dep state.
+-- Returns Nothing for Byron which uses a different consensus protocol.
+-- For Shelley–Alonzo (TPraos) the nonce lives in TicknState; for
+-- Babbage–Dijkstra (Praos) it is stored directly on PraosState.
+extLedgerStateEpochNonce :: ExtLedgerState (CardanoBlock c) mk -> Maybe Nonce
+extLedgerStateEpochNonce extLedgerState =
+  case State.getHardForkState (headerStateChainDep (headerState extLedgerState)) of
+    TeleByron _ -> Nothing
+    TeleShelley _ curr -> Just $ fromTPraos curr
+    TeleAllegra _ _ curr -> Just $ fromTPraos curr
+    TeleMary _ _ _ curr -> Just $ fromTPraos curr
+    TeleAlonzo _ _ _ _ curr -> Just $ fromTPraos curr
+    TeleBabbage _ _ _ _ _ curr -> Just $ fromPraos curr
+    TeleConway _ _ _ _ _ _ curr -> Just $ fromPraos curr
+    TeleDijkstra _ _ _ _ _ _ _ curr -> Just $ fromPraos curr
+  where
+    fromTPraos (State.Current{State.currentState = WrapChainDepState st}) =
+      ticknStateEpochNonce . csTickn $ tpraosStateChainDepState st
+    fromPraos (State.Current{State.currentState = WrapChainDepState st}) =
+      praosStateEpochNonce st
 
 tickedExtLedgerStateEpochNo ::
   Ticked (ExtLedgerState (CardanoBlock c)) mk ->
