@@ -12,7 +12,7 @@ repository cardano-haskell-packages
 
 index-state:
   , hackage.haskell.org 2026-02-18T09:12:21Z
-  , cardano-haskell-packages 2026-03-17T12:33:13Z
+  , cardano-haskell-packages 2026-03-19T11:07:17Z
 
 packages: .
 
@@ -52,13 +52,13 @@ package HsOpenSSL
 --     subdir: command-line
 --             core
 
-source-repository-package
-  type: git
-  location: https://github.com/IntersectMBO/cardano-api
-  tag: 22328f326cf362ce69f2f26790f6cdc87f2f16e3
-  --sha256: sha256-lO8PROKkaLgw3VGdhyenDH3l71iPp9z7mConGveBz5I=
-  subdir:
-    cardano-api
+-- source-repository-package
+--   type: git
+--   location: https://github.com/IntersectMBO/cardano-api
+--   tag: 22328f326cf362ce69f2f26790f6cdc87f2f16e3
+--   --sha256: sha256-lO8PROKkaLgw3VGdhyenDH3l71iPp9z7mConGveBz5I=
+--   subdir:
+--     cardano-api
 
 -- source-repository-package
 --   type: git
