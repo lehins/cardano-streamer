@@ -3,6 +3,7 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
 
 module Cardano.Streamer.Storage (
@@ -113,32 +114,32 @@ openLedgerDb ldbArgs = do
     getBlock _ = pure (error "No getBlock")
     getVolatileSuffix = LDB.praosGetVolatileSuffix $ LDB.ledgerDbCfgSecParam $ LDB.lgrConfig ldbArgs
   logInfo "Initializing LedgerDb"
-  (ledgerDb, testInternals) <-
-    case LDB.lgrBackendArgs ldbArgs of
-      LDB.LedgerDbBackendArgsV1 ldbBackendArgs -> do
-        let
-          snapManager = LDB.V1.Snapshots.snapshotManager ldbArgs
-          initDb = LDB.V1.mkInitDb ldbArgs ldbBackendArgs getBlock snapManager getVolatileSuffix
-        openLedgerDbNoReplay ldbArgs initDb
-      LDB.LedgerDbBackendArgsV2 (LDB.V2.Backend.SomeBackendArgs ldbBackendArgs) -> do
-        let
-          hasFS = LDB.lgrHasFS ldbArgs
-          resourcesTracer = LDB.LedgerDBFlavorImplEvent . LDB.FlavorImplSpecificTraceV2 >$< LDB.lgrTracer ldbArgs
-        resources <-
-          liftIO $
-            LDB.V2.Backend.mkResources
-              (Proxy @blk)
-              resourcesTracer
-              ldbBackendArgs
-              (LDB.lgrRegistry ldbArgs)
-              hasFS
-        let
-          codecConfig = configCodec . getExtLedgerCfg . LDB.ledgerDbCfg $ LDB.lgrConfig ldbArgs
-          snapTracer = LDB.Trace.LedgerDBSnapshotEvent >$< LDB.lgrTracer ldbArgs
-          snapManager =
-            LDB.V2.Backend.snapshotManager (Proxy @blk) resources codecConfig snapTracer hasFS
-          initDb = LDB.V2.mkInitDb ldbArgs getBlock snapManager getVolatileSuffix resources
-        openLedgerDbNoReplay ldbArgs initDb
+  (ledgerDb, testInternals) <- withRunInIO $ \run ->
+    runWithTempRegistry $
+      (,()) <$> do
+        case LDB.lgrBackendArgs ldbArgs of
+          LDB.LedgerDbBackendArgsV1 ldbBackendArgs -> do
+            let
+              snapManager = LDB.V1.Snapshots.snapshotManager ldbArgs
+              initDb = LDB.V1.mkInitDb ldbArgs ldbBackendArgs getBlock snapManager getVolatileSuffix
+            lift $ run $ openLedgerDbNoReplay ldbArgs initDb
+          LDB.LedgerDbBackendArgsV2 (LDB.V2.Backend.SomeBackendArgs ldbBackendArgs) -> do
+            let
+              hasFS = LDB.lgrHasFS ldbArgs
+              resourcesTracer = LDB.LedgerDBFlavorImplEvent . LDB.FlavorImplSpecificTraceV2 >$< LDB.lgrTracer ldbArgs
+            resources <-
+              LDB.V2.Backend.mkResources
+                (Proxy @blk)
+                resourcesTracer
+                ldbBackendArgs
+                hasFS
+            let
+              codecConfig = configCodec . getExtLedgerCfg . LDB.ledgerDbCfg $ LDB.lgrConfig ldbArgs
+              snapTracer = LDB.Trace.LedgerDBSnapshotEvent >$< LDB.lgrTracer ldbArgs
+              snapManager =
+                LDB.V2.Backend.snapshotManager (Proxy @blk) resources codecConfig snapTracer hasFS
+              initDb = LDB.V2.mkInitDb ldbArgs getBlock snapManager getVolatileSuffix resources
+            lift $ run $ openLedgerDbNoReplay ldbArgs initDb
   logInfo $ "Done initializing LedgerDb"
   pure $!
     LedgerDb
@@ -152,7 +153,7 @@ ledgerDbStateWithTablesForBlock ::
   RIO env (ExtLedgerState blk EmptyMK, LedgerTables (ExtLedgerState blk) ValuesMK)
 ledgerDbStateWithTablesForBlock block = do
   ledgerDb <- view ledgerDbL
-  liftIO $ LDB.withPrivateTipForker (lLedgerDb ledgerDb) $ \tipForker -> do
+  liftIO $ LDB.withTipForker (lLedgerDb ledgerDb) $ \tipForker -> do
     st <- IOLike.atomically $ LDB.forkerGetLedgerState tipForker
     tbs <- LDB.forkerReadTables tipForker (getBlockKeySets block)
     pure (st, tbs)
@@ -176,7 +177,7 @@ ledgerDbExtLedgerStateForBlock ::
   blk -> m (ExtLedgerState blk ValuesMK)
 ledgerDbExtLedgerStateForBlock block = do
   LedgerDb{lLedgerDb} <- view ledgerDbL
-  liftIO $ LDB.withPrivateTipForker lLedgerDb $ \tipForker -> do
+  liftIO $ LDB.withTipForker lLedgerDb $ \tipForker -> do
     extLedgerState <- IOLike.atomically $ LDB.forkerGetLedgerState tipForker
     tables <- LDB.forkerReadTables tipForker (getBlockKeySets block)
     pure $ extLedgerState `withLedgerTables` tables
@@ -269,7 +270,7 @@ withImmutableDb ::
 withImmutableDb iDbArgs mStartSlotNo action = do
   result <- withRunInIO $ \run ->
     bracket
-      (ImmutableDB.openDBInternal iDbArgs runWithTempRegistry)
+      (ImmutableDB.openDBInternal iDbArgs)
       (ImmutableDB.closeDB . fst)
       $ \(iDb, iDbInternal) -> do
         run $ logDebug "Opened an immutable database"
