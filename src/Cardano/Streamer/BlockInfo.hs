@@ -126,15 +126,15 @@ withProtocolBlock ::
   (forall era. EraApp era => CardanoEra -> ShelleyBlock (Praos c) era -> a) ->
   CardanoBlock c ->
   a
-withProtocolBlock applyBronBlock applyTPraosBlock applyPraosBlock = \case
-  BlockByron byronBlock -> applyBronBlock byronBlock
+withProtocolBlock applyByronBlock applyTPraosBlock applyPraosBlock = \case
+  BlockByron byronBlock -> applyByronBlock byronBlock
   BlockShelley shelleyBlock -> applyTPraosBlock Shelley shelleyBlock
   BlockAllegra allegraBlock -> applyTPraosBlock Allegra allegraBlock
   BlockMary maryBlock -> applyTPraosBlock Mary maryBlock
   BlockAlonzo alonzoBlock -> applyTPraosBlock Alonzo alonzoBlock
   BlockBabbage babbageBlock -> applyPraosBlock Babbage babbageBlock
   BlockConway conwayBlock -> applyPraosBlock Conway conwayBlock
-  BlockDijkstra conwayBlock -> applyPraosBlock Dijkstra conwayBlock
+  BlockDijkstra dijkstraBlock -> applyPraosBlock Dijkstra dijkstraBlock
 
 getBlockSummary :: Crypto c => CardanoBlock c -> BlockSummary
 getBlockSummary =

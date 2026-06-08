@@ -856,6 +856,7 @@ applyTickedNewEpochStateWithBlock ::
   (TransitionInfo -> ChainValidationState -> ByronBlock -> a) ->
   ( forall era.
     EraApp era =>
+    CardanoEra ->
     TransitionInfo ->
     NewEpochState era ->
     ShelleyBlock (TPraos c) era ->
@@ -863,6 +864,7 @@ applyTickedNewEpochStateWithBlock ::
   ) ->
   ( forall era.
     EraApp era =>
+    CardanoEra ->
     TransitionInfo ->
     NewEpochState era ->
     ShelleyBlock (Praos c) era ->
@@ -871,16 +873,25 @@ applyTickedNewEpochStateWithBlock ::
   Ticked (ExtLedgerState (CardanoBlock c)) mk ->
   CardanoBlock c ->
   a
-applyTickedNewEpochStateWithBlock fByron fTPraos fPraos tickedExtLedgerState block =
+applyTickedNewEpochStateWithBlock applyByronBlock applyTPraosBlock applyPraosBlock tickedExtLedgerState block =
   case (tickedLedgerState tickedExtLedgerState, block) of
-    (TickedLedgerStateByron ti ls, BlockByron blk) -> fByron ti (tickedByronLedgerState ls) blk
-    (TickedLedgerStateShelley ti ls, BlockShelley blk) -> fTPraos ti (tickedShelleyLedgerState ls) blk
-    (TickedLedgerStateAllegra ti ls, BlockAllegra blk) -> fTPraos ti (tickedShelleyLedgerState ls) blk
-    (TickedLedgerStateMary ti ls, BlockMary blk) -> fTPraos ti (tickedShelleyLedgerState ls) blk
-    (TickedLedgerStateAlonzo ti ls, BlockAlonzo blk) -> fTPraos ti (tickedShelleyLedgerState ls) blk
-    (TickedLedgerStateBabbage ti ls, BlockBabbage blk) -> fPraos ti (tickedShelleyLedgerState ls) blk
-    (TickedLedgerStateConway ti ls, BlockConway blk) -> fPraos ti (tickedShelleyLedgerState ls) blk
-    _ -> error "Impossible combination of a ledegr state and a block"
+    (TickedLedgerStateByron ti ls, BlockByron byronBlock) ->
+      applyByronBlock ti (tickedByronLedgerState ls) byronBlock
+    (TickedLedgerStateShelley ti ls, BlockShelley shelleyBlock) ->
+      applyTPraosBlock Shelley ti (tickedShelleyLedgerState ls) shelleyBlock
+    (TickedLedgerStateAllegra ti ls, BlockAllegra allegraBlock) ->
+      applyTPraosBlock Allegra ti (tickedShelleyLedgerState ls) allegraBlock
+    (TickedLedgerStateMary ti ls, BlockMary maryBlock) ->
+      applyTPraosBlock Mary ti (tickedShelleyLedgerState ls) maryBlock
+    (TickedLedgerStateAlonzo ti ls, BlockAlonzo alonzoBlock) ->
+      applyTPraosBlock Alonzo ti (tickedShelleyLedgerState ls) alonzoBlock
+    (TickedLedgerStateBabbage ti ls, BlockBabbage babbageBlock) ->
+      applyPraosBlock Babbage ti (tickedShelleyLedgerState ls) babbageBlock
+    (TickedLedgerStateConway ti ls, BlockConway conwayBlock) ->
+      applyPraosBlock Conway ti (tickedShelleyLedgerState ls) conwayBlock
+    (TickedLedgerStateDijkstra ti ls, BlockDijkstra dijkstraBlock) ->
+      applyPraosBlock Dijkstra ti (tickedShelleyLedgerState ls) dijkstraBlock
+    _ -> error "Impossible combination of a ledger state and a block"
 
 applyTickedNewEpochStateWithTxs ::
   (ChainValidationState -> [B.ATxAux ByteString] -> a) ->
@@ -891,8 +902,8 @@ applyTickedNewEpochStateWithTxs ::
 applyTickedNewEpochStateWithTxs fByron fShelleyOnwards =
   applyTickedNewEpochStateWithBlock
     (\_ti cvs -> fByron cvs . getByronTxs)
-    (\_ti nes -> fShelleyOnwards nes . getShelleyOnwardsTxs)
-    (\_ti nes -> fShelleyOnwards nes . getShelleyOnwardsTxs)
+    (\_ _ti nes -> fShelleyOnwards nes . getShelleyOnwardsTxs)
+    (\_ _ti nes -> fShelleyOnwards nes . getShelleyOnwardsTxs)
 
 blockLanguageRefScriptsStats ::
   Ticked (ExtLedgerState (CardanoBlock c)) mk ->
