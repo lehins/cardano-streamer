@@ -89,7 +89,8 @@ appScriptSize :: AppScript -> Int
 appScriptSize = SBS.length . appScriptBytes
 
 class
-  ( EraBlockBody era
+  ( Era era
+  , EraBlockBody era
   , EraGov era
   , EraUTxO era
   , EraStake era
