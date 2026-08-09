@@ -28,12 +28,14 @@ import Ouroboros.Consensus.Storage.ChainDB.Impl.Args (
   completeChainDbArgs,
   updateTracer,
  )
-import Ouroboros.Consensus.Storage.LedgerDB.Args (lgrStartSnapshot)
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (
   DiskSnapshot (..),
  )
 import Ouroboros.Consensus.Util.CBOR (ReadIncrementalErr)
 import RIO.Time
+import System.FS.API (MountPoint (..), SomeHasFS (..))
+import System.FS.IO (ioHasFS)
+import System.Random (mkStdGen)
 
 newtype NodeConfigError = NodeConfigError {unNodeConfigError :: Text}
   deriving (Show, Eq)
@@ -49,9 +51,10 @@ readCardanoGenesisConfig =
   liftIO . throwExceptT . Api.readCardanoGenesisConfig
 
 readProtocolInfoCardano :: MonadIO m => FilePath -> m (ProtocolInfo (CardanoBlock StandardCrypto))
-readProtocolInfoCardano configFilePath = do
-  nodeConfig <- readNodeConfig configFilePath
-  fst . Api.mkProtocolInfoCardano <$> readCardanoGenesisConfig nodeConfig
+readProtocolInfoCardano configFilePath = liftIO $ do
+  genesisConfig <- readCardanoGenesisConfig =<< readNodeConfig configFilePath
+  -- This is a mount point for data injection, and is totaly unused by cardano-streamer.
+  fst <$> Api.mkProtocolInfoCardano (SomeHasFS (ioHasFS $ MountPoint ".")) genesisConfig
 
 -- TODO: Move upstream
 instance Exception ReadIncrementalErr
@@ -64,10 +67,9 @@ mkDbArgs ::
   , HasLogFunc env
   ) =>
   FilePath ->
-  Maybe DiskSnapshot ->
   ProtocolInfo (CardanoBlock StandardCrypto) ->
   m (ChainDB.ChainDbArgs Identity IO (CardanoBlock StandardCrypto))
-mkDbArgs dbDir diskSnapshot ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
+mkDbArgs dbDir ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
   registry <- view registryL
   dbTracer <- mkTracer (Just "Trace") LevelDebug
   let
@@ -82,13 +84,11 @@ mkDbArgs dbDir diskSnapshot ProtocolInfo{pInfoInitLedger, pInfoConfig} = do
           (const True)
           (Node.stdMkChainDbHasFS dbDir)
           (Node.stdMkChainDbHasFS dbDir)
+          (mkStdGen 2026)
           ldbArgs
           ChainDB.defaultArgs
     -- Overwrite starting disk snapshot for LedgerDB
-    lgrDbArgs =
-      (cdbLgrDbArgs chainDbArgs)
-        { lgrStartSnapshot = diskSnapshot
-        }
+    lgrDbArgs = cdbLgrDbArgs chainDbArgs
   logDebug $ "Preparing to open the database: " <> displayShow dbDir
   pure $ chainDbArgs{cdbLgrDbArgs = lgrDbArgs}
   where
@@ -99,7 +99,7 @@ runDbStreamerApp ::
 runDbStreamerApp action = do
   appConf <- ask
   protocolInfo <- readProtocolInfoCardano (appConfFilePath appConf)
-  dbArgs <- mkDbArgs (appConfChainDir appConf) (appConfReadDiskSnapshot appConf) protocolInfo
+  dbArgs <- mkDbArgs (appConfChainDir appConf) protocolInfo
   let
     iDbArgs = cdbImmDbArgs dbArgs
     startSlotNo = SlotNo . dsNumber <$> appConfReadDiskSnapshot appConf
@@ -110,7 +110,7 @@ runDbStreamerApp action = do
     startTime <- getCurrentTime
     writeBlocksRef <-
       newIORef (appConfWriteBlocksSlotNoSet appConf, appConfWriteBlocksBlockHashSet appConf)
-    ledgerDb <- openLedgerDb (ChainDB.cdbLgrDbArgs dbArgs)
+    ledgerDb <- openLedgerDb (appConfReadDiskSnapshot appConf) (ChainDB.cdbLgrDbArgs dbArgs)
     refSnapshots <- newIORef (appConfWriteDiskSnapshots appConf)
     let app =
           DbStreamerApp

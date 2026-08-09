@@ -76,7 +76,7 @@ data SlotWithBlock = SlotWithBlock
   -- ^ Decoded block with extra information
   , swbPrevExtLedgerState :: !(ExtLedgerState (CardanoBlock StandardCrypto) ValuesMK)
   -- ^ Ledger state from some prior slot when the previous block was applied
-  , swbTickExtLedgerState :: !(Ticked (ExtLedgerState (CardanoBlock StandardCrypto)) DiffMK)
+  , swbTickExtLedgerState :: !(Ticked ExtLedgerState (CardanoBlock StandardCrypto) DiffMK)
   -- ^ Ledger state from the current slot after TICK rule was executed
   , swbNewExtLedgerState :: !(ExtLedgerState (CardanoBlock StandardCrypto) DiffMK)
   -- ^ Final ledger state at the end of this slot after block was applied to
@@ -132,11 +132,11 @@ data SlotInspection b dec ldbPull tick appBlock ldbPush r = SlotInspection
         RIO
           App
           ( LedgerResult
-              (ExtLedgerState (CardanoBlock StandardCrypto))
-              (Ticked (ExtLedgerState (CardanoBlock StandardCrypto)) DiffMK)
+              (CardanoBlock StandardCrypto)
+              (Ticked ExtLedgerState (CardanoBlock StandardCrypto) DiffMK)
           )
       ) ->
-      RIO App (tick, Ticked (ExtLedgerState (CardanoBlock StandardCrypto)) DiffMK)
+      RIO App (tick, Ticked ExtLedgerState (CardanoBlock StandardCrypto) DiffMK)
   , siApplyBlock ::
       tick ->
       (ComputeLedgerEvents -> RIO App (ExtLedgerState (CardanoBlock StandardCrypto) DiffMK)) ->

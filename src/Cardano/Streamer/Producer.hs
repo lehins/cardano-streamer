@@ -244,7 +244,7 @@ blocksWriter bwi@BlockWithInfo{biSlotNo, biBlockHeaderHash} mBlock mExtLedgerSta
 diskSnapshotsWriter ::
   ( MonadIO m
   , MonadReader (DbStreamerApp blk) m
-  , IsLedger (LedgerState blk)
+  , IsLedger LedgerState blk
   ) =>
   ExtLedgerState (CardanoBlock StandardCrypto) mk -> m ()
 diskSnapshotsWriter extLedgerState =

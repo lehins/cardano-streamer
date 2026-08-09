@@ -28,7 +28,9 @@ import Cardano.Ledger.Core
 import Cardano.Ledger.Credential
 import Cardano.Ledger.Val
 import Cardano.Protocol.Crypto
-import Cardano.Protocol.TPraos.BHeader
+import Cardano.Protocol.Praos.BlockHeader hiding (Header)
+import qualified Cardano.Protocol.Praos.BlockHeader as Praos (Header)
+import Cardano.Protocol.TPraos.BlockHeader
 import Cardano.Streamer.Common
 import Cardano.Streamer.Ledger
 import Control.Monad.Trans.Fail.String (errorFail)
@@ -47,8 +49,6 @@ import Ouroboros.Consensus.Byron.Ledger.Block
 import Ouroboros.Consensus.Cardano.Block
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (getOneEraHash)
 import Ouroboros.Consensus.Protocol.Praos (Praos)
-import Ouroboros.Consensus.Protocol.Praos.Header hiding (Header)
-import qualified Ouroboros.Consensus.Protocol.Praos.Header as Praos (Header)
 import Ouroboros.Consensus.Protocol.TPraos (TPraos)
 import Ouroboros.Consensus.Shelley.Ledger.Block hiding (Header)
 import Ouroboros.Network.SizeInBytes (SizeInBytes)
@@ -191,22 +191,22 @@ getTPraosBlockSummary ::
   ShelleyBlock (TPraos c) era ->
   BlockSummary
 getTPraosBlockSummary era block =
-  let (blockHeaderBody, blockHeaderSize) =
+  let (bHeaderBody, bHeaderSize) =
         case blockHeader (shelleyBlockRaw block) of
           bh@(BHeader bhBody _) -> (bhBody, originalBytesSize bh)
       (txsSeq, blockSize) = case shelleyBlockRaw block of
-        Block _ blockBody -> (blockBody ^. txSeqBlockBodyL, bBodySize (ProtVer (eraProtVerLow @era) 0) blockBody)
-      blockBodySize = fromIntegral (bsize blockHeaderBody)
-   in assert (blockSize == blockHeaderSize + blockBodySize) $
+        Block _ blockBody -> (blockBody ^. txSeqBlockBodyL, blockBodySize (ProtVer (eraProtVerLow @era) 0) blockBody)
+      bBodySize = fromIntegral (bsize bHeaderBody)
+   in assert (blockSize == bHeaderSize + bBodySize) $
         BlockSummary
           { bpEra = era
-          , bpSlotNo = bheaderSlotNo blockHeaderBody
-          , bpBlockNo = bheaderBlockNo blockHeaderBody
+          , bpSlotNo = bheaderSlotNo bHeaderBody
+          , bpBlockNo = bheaderBlockNo bHeaderBody
           , -- , bpAbsBlockNo = absBlockNo
-            bpProtVer = Just $! bprotver blockHeaderBody
+            bpProtVer = Just $! bprotver bHeaderBody
           , bpBlockSize = blockSize
-          , bpBlockBodySize = blockBodySize
-          , bpBlockHeaderSize = blockHeaderSize
+          , bpBlockBodySize = bBodySize
+          , bpBlockHeaderSize = bHeaderSize
           , bpTxsSummary = getTxsSummary txsSeq
           }
 
@@ -218,21 +218,21 @@ getPraosBlockSummary ::
   BlockSummary
 getPraosBlockSummary era block =
   let bHeader = blockHeader (shelleyBlockRaw block)
-      blockHeaderBody = headerBody bHeader
-      blockHeaderSize = headerSize bHeader
+      bHeaderBody = headerBody bHeader
+      bHeaderSize = headerSize bHeader
       (txsSeq, blockSize) = case shelleyBlockRaw block of
-        Block _ blockBody -> (blockBody ^. txSeqBlockBodyL, bBodySize (ProtVer (eraProtVerLow @era) 0) blockBody)
-      blockBodySize = fromIntegral (hbBodySize blockHeaderBody)
-   in assert (blockSize == blockHeaderSize + blockBodySize) $
+        Block _ blockBody -> (blockBody ^. txSeqBlockBodyL, blockBodySize (ProtVer (eraProtVerLow @era) 0) blockBody)
+      bBodySize = fromIntegral (hbBodySize bHeaderBody)
+   in assert (blockSize == bHeaderSize + bBodySize) $
         BlockSummary
           { bpEra = era
-          , bpSlotNo = hbSlotNo blockHeaderBody
-          , bpBlockNo = hbBlockNo blockHeaderBody
+          , bpSlotNo = hbSlotNo bHeaderBody
+          , bpBlockNo = hbBlockNo bHeaderBody
           , -- , bpAbsBlockNo = absBlockNo
-            bpProtVer = Just $ hbProtVer blockHeaderBody
+            bpProtVer = Just $ hbProtVer bHeaderBody
           , bpBlockSize = blockSize
-          , bpBlockBodySize = blockBodySize
-          , bpBlockHeaderSize = blockHeaderSize
+          , bpBlockBodySize = bBodySize
+          , bpBlockHeaderSize = bHeaderSize
           , bpTxsSummary = getTxsSummary txsSeq
           }
 
@@ -333,7 +333,7 @@ readTx ::
   , DecCBOR (Annotator (Tx TopTx era))
   , MonadIO m
   ) =>
-  FilePath -> m ( Tx TopTx era)
+  FilePath -> m (Tx TopTx era)
 readTx fp =
   liftIO (BSL.readFile fp) <&> decodeFullAnnotator (eraProtVerLow @era) "Tx" decCBOR >>= \case
     Left exc -> throwIO exc

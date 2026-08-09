@@ -61,6 +61,7 @@ library
                      , cardano-ledger-core >= 1.20
                      , cardano-ledger-shelley
                      , cardano-ledger-conway >= 1.22
+                     , cardano-protocol
                      , cardano-protocol-tpraos
                      , cardano-slotting
                      , cassava
@@ -71,11 +72,12 @@ library
                      , FailT
                      , fs-api
                      , strict-sop-core
-                     , ouroboros-consensus:{ouroboros-consensus, cardano, protocol, diffusion, lsm, lmdb} >= 1.0.0.0
+                     , ouroboros-consensus:{ouroboros-consensus, cardano, protocol, diffusion, lsm} >= 3.0.0.0
                      , ouroboros-network:api >= 0.24
                      , io-classes
                      , nothunks
                      , profunctors
+                     , random
                      , resource-registry
                      -- prevent falling into bug in mconcat for Utf8Builder
                      , rio <0.1.23 || >=0.1.24

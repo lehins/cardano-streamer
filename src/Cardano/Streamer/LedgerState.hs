@@ -329,8 +329,8 @@ readNewEpochState fp =
 
 pattern TickedLedgerStateByron ::
   TransitionInfo ->
-  Ticked (LedgerState ByronBlock) mk ->
-  Ticked (LedgerState (CardanoBlock c)) mk
+  Ticked LedgerState ByronBlock mk ->
+  Ticked LedgerState (CardanoBlock c) mk
 pattern TickedLedgerStateByron ti st <-
   TickedHardForkLedgerState
     ti
@@ -340,8 +340,8 @@ pattern TickedLedgerStateByron ti st <-
 
 pattern TickedLedgerStateShelley ::
   TransitionInfo ->
-  Ticked (LedgerState (ShelleyBlock (TPraos c) ShelleyEra)) mk ->
-  Ticked (LedgerState (CardanoBlock c)) mk
+  Ticked LedgerState (ShelleyBlock (TPraos c) ShelleyEra) mk ->
+  Ticked LedgerState (CardanoBlock c) mk
 pattern TickedLedgerStateShelley ti st <-
   TickedHardForkLedgerState
     ti
@@ -351,8 +351,8 @@ pattern TickedLedgerStateShelley ti st <-
 
 pattern TickedLedgerStateAllegra ::
   TransitionInfo ->
-  Ticked (LedgerState (ShelleyBlock (TPraos c) AllegraEra)) mk ->
-  Ticked (LedgerState (CardanoBlock c)) mk
+  Ticked LedgerState (ShelleyBlock (TPraos c) AllegraEra) mk ->
+  Ticked LedgerState (CardanoBlock c) mk
 pattern TickedLedgerStateAllegra ti st <-
   TickedHardForkLedgerState
     ti
@@ -362,8 +362,8 @@ pattern TickedLedgerStateAllegra ti st <-
 
 pattern TickedLedgerStateMary ::
   TransitionInfo ->
-  Ticked (LedgerState (ShelleyBlock (TPraos c) MaryEra)) mk ->
-  Ticked (LedgerState (CardanoBlock c)) mk
+  Ticked LedgerState (ShelleyBlock (TPraos c) MaryEra) mk ->
+  Ticked LedgerState (CardanoBlock c) mk
 pattern TickedLedgerStateMary ti st <-
   TickedHardForkLedgerState
     ti
@@ -373,8 +373,8 @@ pattern TickedLedgerStateMary ti st <-
 
 pattern TickedLedgerStateAlonzo ::
   TransitionInfo ->
-  Ticked (LedgerState (ShelleyBlock (TPraos c) AlonzoEra)) mk ->
-  Ticked (LedgerState (CardanoBlock c)) mk
+  Ticked LedgerState (ShelleyBlock (TPraos c) AlonzoEra) mk ->
+  Ticked LedgerState (CardanoBlock c) mk
 pattern TickedLedgerStateAlonzo ti st <-
   TickedHardForkLedgerState
     ti
@@ -384,8 +384,8 @@ pattern TickedLedgerStateAlonzo ti st <-
 
 pattern TickedLedgerStateBabbage ::
   TransitionInfo ->
-  Ticked (LedgerState (ShelleyBlock (Praos c) BabbageEra)) mk ->
-  Ticked (LedgerState (CardanoBlock c)) mk
+  Ticked LedgerState (ShelleyBlock (Praos c) BabbageEra) mk ->
+  Ticked LedgerState (CardanoBlock c) mk
 pattern TickedLedgerStateBabbage ti st <-
   TickedHardForkLedgerState
     ti
@@ -395,8 +395,8 @@ pattern TickedLedgerStateBabbage ti st <-
 
 pattern TickedLedgerStateConway ::
   TransitionInfo ->
-  Ticked (LedgerState (ShelleyBlock (Praos c) ConwayEra)) mk ->
-  Ticked (LedgerState (CardanoBlock c)) mk
+  Ticked LedgerState (ShelleyBlock (Praos c) ConwayEra) mk ->
+  Ticked LedgerState (CardanoBlock c) mk
 pattern TickedLedgerStateConway ti st <-
   TickedHardForkLedgerState
     ti
@@ -406,8 +406,8 @@ pattern TickedLedgerStateConway ti st <-
 
 pattern TickedLedgerStateDijkstra ::
   TransitionInfo ->
-  Ticked (LedgerState (ShelleyBlock (Praos c) DijkstraEra)) mk ->
-  Ticked (LedgerState (CardanoBlock c)) mk
+  Ticked LedgerState (ShelleyBlock (Praos c) DijkstraEra) mk ->
+  Ticked LedgerState (CardanoBlock c) mk
 pattern TickedLedgerStateDijkstra ti st <-
   TickedHardForkLedgerState
     ti
@@ -584,7 +584,7 @@ applyNonByronNewEpochState f = applyNewEpochState (const Nothing) (\_ -> Just . 
 applyTickedNewEpochState ::
   (TransitionInfo -> ChainValidationState -> a) ->
   (forall era. EraApp era => TransitionInfo -> NewEpochState era -> a) ->
-  Ticked (ExtLedgerState (CardanoBlock c)) mk ->
+  Ticked ExtLedgerState (CardanoBlock c) mk ->
   a
 applyTickedNewEpochState fByronBased fShelleyBased tickedExtLedgerState =
   case tickedLedgerState tickedExtLedgerState of
@@ -599,7 +599,7 @@ applyTickedNewEpochState fByronBased fShelleyBased tickedExtLedgerState =
 
 applyTickedNonByronNewEpochState ::
   (forall era. EraApp era => TransitionInfo -> NewEpochState era -> a) ->
-  Ticked (ExtLedgerState (CardanoBlock c)) mk ->
+  Ticked ExtLedgerState (CardanoBlock c) mk ->
   Maybe a
 applyTickedNonByronNewEpochState f =
   applyTickedNewEpochState (\_ _ -> Nothing) (\ti -> Just . f ti)
@@ -629,7 +629,7 @@ lookupTotalRewards creds nes =
     credsRewards = queryAccounts creds nes
 
 extractLedgerEvents ::
-  [AuxLedgerEvent (ExtLedgerState (CardanoBlock c))] ->
+  [AuxLedgerEvent (CardanoBlock StandardCrypto)] ->
   (forall era. EraApp era => ShelleyLedgerEvent era -> Maybe e) ->
   [e]
 extractLedgerEvents extEvents handleEvent =
@@ -659,7 +659,7 @@ extLedgerStateEpochNo =
     (const nesEL)
 
 tickedExtLedgerStateEpochNo ::
-  Ticked (ExtLedgerState (CardanoBlock c)) mk ->
+  Ticked ExtLedgerState (CardanoBlock c) mk ->
   (TransitionInfo, EpochNo)
 tickedExtLedgerStateEpochNo =
   applyTickedNewEpochState
@@ -672,7 +672,7 @@ detectNewRewards ::
   EpochNo ->
   Map (Credential Staking) Coin ->
   Map (Credential Staking) Coin ->
-  Ticked (ExtLedgerState (CardanoBlock c)) mk ->
+  Ticked ExtLedgerState (CardanoBlock c) mk ->
   m (EpochNo, Maybe (Map (Credential Staking) Coin, Map (Credential Staking) Coin))
 detectNewRewards creds prevEpochNo prevRewards epochWithdrawals extLedgerState = do
   let (ti, curEpochNo) = tickedExtLedgerStateEpochNo extLedgerState
@@ -870,7 +870,7 @@ applyTickedNewEpochStateWithBlock ::
     ShelleyBlock (Praos c) era ->
     a
   ) ->
-  Ticked (ExtLedgerState (CardanoBlock c)) mk ->
+  Ticked ExtLedgerState (CardanoBlock c) mk ->
   CardanoBlock c ->
   a
 applyTickedNewEpochStateWithBlock applyByronBlock applyTPraosBlock applyPraosBlock tickedExtLedgerState block =
@@ -896,7 +896,7 @@ applyTickedNewEpochStateWithBlock applyByronBlock applyTPraosBlock applyPraosBlo
 applyTickedNewEpochStateWithTxs ::
   (ChainValidationState -> [B.ATxAux ByteString] -> a) ->
   (forall era. EraApp era => NewEpochState era -> [Tx TopTx era] -> a) ->
-  Ticked (ExtLedgerState (CardanoBlock c)) mk ->
+  Ticked ExtLedgerState (CardanoBlock c) mk ->
   CardanoBlock c ->
   a
 applyTickedNewEpochStateWithTxs fByron fShelleyOnwards =
@@ -906,7 +906,7 @@ applyTickedNewEpochStateWithTxs fByron fShelleyOnwards =
     (\_ _ti nes -> fShelleyOnwards nes . getShelleyOnwardsTxs)
 
 blockLanguageRefScriptsStats ::
-  Ticked (ExtLedgerState (CardanoBlock c)) mk ->
+  Ticked ExtLedgerState (CardanoBlock c) mk ->
   CardanoBlock c ->
   (Map AppLanguage (ScriptsStats MaxScript), Map AppLanguage (ScriptsStats MaxScript))
 blockLanguageRefScriptsStats =

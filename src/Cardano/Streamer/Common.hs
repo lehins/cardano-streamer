@@ -63,7 +63,7 @@ import Cardano.Protocol.Crypto (StandardCrypto)
 import Cardano.Streamer.Time
 import Control.Monad.Trans.Except
 import Control.ResourceRegistry (ResourceRegistry)
-import Control.Tracer (Tracer (..))
+import qualified Control.Tracer as Tracer
 import qualified Data.Aeson as Aeson (ToJSON, ToJSONKey, encode)
 import Data.ByteString.Builder as BSL (lazyByteString)
 import qualified Data.ByteString.Char8 as BS8 (pack)
@@ -141,10 +141,10 @@ mkTracer ::
   -- | Optional prefix for tracing messages
   Maybe Text ->
   LogLevel ->
-  m1 (Tracer m2 a)
+  m1 (Tracer.Tracer m2 a)
 mkTracer mPrefix logLevel = do
   logFunc <- view logFuncL
-  return $ Tracer $ \ev ->
+  return $ Tracer.mkTracer $ \ev ->
     let msg =
           case mPrefix of
             Just prefix -> "[" <> display prefix <> "] " <> displayShow ev

@@ -25,12 +25,12 @@ import Cardano.Streamer.LedgerState
 import Data.ByteString.Builder (lazyByteString)
 import Data.Csv
 import Data.Csv.Incremental as CSV
+import qualified Data.Map.Strict as Map
 import Ouroboros.Consensus.Ledger.Abstract (ComputeLedgerEvents (..))
 import Ouroboros.Consensus.Ledger.Basics (LedgerResult (..))
 import Ouroboros.Consensus.Node.ProtocolInfo (ProtocolInfo (..))
 import Ouroboros.Consensus.Shelley.Ledger.Ledger (ShelleyLedgerEvent (..))
 import RIO.Time
-import qualified Data.Map.Strict as Map
 
 data RewardDistribution a
   = RewardDistribution

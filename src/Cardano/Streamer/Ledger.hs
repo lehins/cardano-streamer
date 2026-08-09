@@ -22,7 +22,7 @@ import Cardano.Ledger.Api.Tx
 import Cardano.Ledger.Babbage.Collateral (collOuts)
 import Cardano.Ledger.Babbage.Core
 import Cardano.Ledger.BaseTypes
-import Cardano.Ledger.Binary (EncCBOR, ToCBOR)
+import Cardano.Ledger.Binary (EncCBOR, EncCBORGroup, ToCBOR)
 import Cardano.Ledger.Coin
 import qualified Cardano.Ledger.Conway.Rules as Conway
 import Cardano.Ledger.Credential
@@ -95,6 +95,7 @@ class
   , EraCertState era
   , ToCBOR (NewEpochState era)
   , EncCBOR (NewEpochState era)
+  , EncCBORGroup (BlockBody era)
   , AnyEraTx era
   ) =>
   EraApp era

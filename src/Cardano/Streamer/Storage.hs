@@ -26,14 +26,13 @@ import Cardano.Streamer.Common
 import Cardano.Streamer.Measure (measureAction)
 import Control.ResourceRegistry (runWithTempRegistry)
 import Data.Functor.Contravariant ((>$<))
-import qualified Data.SOP.Dict as Dict
 import Ouroboros.Consensus.Block (ConvertRawHash, GetPrevHash, Point (..))
 import Ouroboros.Consensus.Block.NestedContent (NestedCtxt)
 import Ouroboros.Consensus.Cardano.Block (CardanoBlock, Header, StandardCrypto)
 import Ouroboros.Consensus.Config (configCodec)
 import Ouroboros.Consensus.HardFork.Abstract (HasHardForkHistory)
 import Ouroboros.Consensus.HeaderValidation (AnnTip, headerStateTip)
-import Ouroboros.Consensus.Ledger.Abstract (ApplyBlock (getBlockKeySets))
+import Ouroboros.Consensus.Ledger.Abstract (getBlockKeySets)
 import Ouroboros.Consensus.Ledger.Basics (IsLedger, LedgerState)
 import Ouroboros.Consensus.Ledger.Extended (ExtLedgerState (headerState), getExtLedgerCfg)
 import Ouroboros.Consensus.Ledger.SupportsProtocol (LedgerSupportsProtocol)
@@ -45,12 +44,6 @@ import Ouroboros.Consensus.Storage.ImmutableDB.Impl (ImmutableDbArgs)
 import qualified Ouroboros.Consensus.Storage.LedgerDB as LDB
 import Ouroboros.Consensus.Storage.LedgerDB.Snapshots (DiskSnapshot (..))
 import qualified Ouroboros.Consensus.Storage.LedgerDB.TraceEvent as LDB.Trace (TraceEvent (..))
-import qualified Ouroboros.Consensus.Storage.LedgerDB.V1 as LDB.V1
-import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.Args as LDB.V1.Args
-import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.BackingStore as LDB.V1.Backend
-import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.BackingStore.Impl.InMemory as LDB.V1.InMemory
-import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.BackingStore.Impl.LMDB as LDB.V1.LMDB
-import qualified Ouroboros.Consensus.Storage.LedgerDB.V1.Snapshots as LDB.V1.Snapshots
 import qualified Ouroboros.Consensus.Storage.LedgerDB.V2 as LDB.V2
 import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.Backend as LDB.V2.Backend
 import qualified Ouroboros.Consensus.Storage.LedgerDB.V2.InMemory as LDB.V2.InMemory
@@ -73,15 +66,16 @@ openLedgerDbNoReplay ::
   , HasLogFunc env
   , HasCallStack
   ) =>
+  Maybe DiskSnapshot ->
   -- | Ledger Db args
   LDB.LedgerDbArgs Identity IO blk ->
   -- | Db initializer
   LDB.InitDB db IO blk ->
   RIO env (LDB.LedgerDB' IO blk, LDB.TestInternals' IO blk)
-openLedgerDbNoReplay ldbArgs initDb = do
+openLedgerDbNoReplay mDiskSnapshot ldbArgs initDb = do
   case hasFS of
     SomeHasFS fs -> liftIO $ createDirectoryIfMissing fs True (mkFsPath [])
-  db <- case lgrStartSnapshot of
+  db <- case mDiskSnapshot of
     Nothing -> liftIO $ initFromGenesis
     Just diskSnapshot -> do
       logInfo $ "Reading initial ledger state: " <> display diskSnapshot
@@ -97,19 +91,19 @@ openLedgerDbNoReplay ldbArgs initDb = do
   where
     LDB.InitDB{LDB.initFromGenesis, LDB.initFromSnapshot} = initDb
     LDB.LedgerDbArgs
-      { LDB.lgrStartSnapshot
-      , LDB.lgrHasFS = hasFS
+      { LDB.lgrHasFS = hasFS
       } = ldbArgs
 
 openLedgerDb ::
   forall blk env.
   ( LedgerSupportsProtocol blk
   , HasHardForkHistory blk
-  , LDB.LedgerSupportsLedgerDB blk
   , HasLogFunc env
   ) =>
-  LDB.LedgerDbArgs Identity IO blk -> RIO env (LedgerDb blk)
-openLedgerDb ldbArgs = do
+  Maybe DiskSnapshot ->
+  LDB.LedgerDbArgs Identity IO blk ->
+  RIO env (LedgerDb blk)
+openLedgerDb mDiskSnapshot ldbArgs = do
   let
     getBlock _ = pure (error "No getBlock")
     getVolatileSuffix = LDB.praosGetVolatileSuffix $ LDB.ledgerDbCfgSecParam $ LDB.lgrConfig ldbArgs
@@ -118,11 +112,6 @@ openLedgerDb ldbArgs = do
     runWithTempRegistry $
       (,()) <$> do
         case LDB.lgrBackendArgs ldbArgs of
-          LDB.LedgerDbBackendArgsV1 ldbBackendArgs -> do
-            let
-              snapManager = LDB.V1.Snapshots.snapshotManager ldbArgs
-              initDb = LDB.V1.mkInitDb ldbArgs ldbBackendArgs getBlock snapManager getVolatileSuffix
-            lift $ run $ openLedgerDbNoReplay ldbArgs initDb
           LDB.LedgerDbBackendArgsV2 (LDB.V2.Backend.SomeBackendArgs ldbBackendArgs) -> do
             let
               hasFS = LDB.lgrHasFS ldbArgs
@@ -139,7 +128,7 @@ openLedgerDb ldbArgs = do
               snapManager =
                 LDB.V2.Backend.snapshotManager (Proxy @blk) resources codecConfig snapTracer hasFS
               initDb = LDB.V2.mkInitDb ldbArgs getBlock snapManager getVolatileSuffix resources
-            lift $ run $ openLedgerDbNoReplay ldbArgs initDb
+            lift $ run $ openLedgerDbNoReplay mDiskSnapshot ldbArgs initDb
   logInfo $ "Done initializing LedgerDb"
   pure $!
     LedgerDb
@@ -150,7 +139,7 @@ openLedgerDb ldbArgs = do
 ledgerDbStateWithTablesForBlock ::
   (HasLedgerDb env blk, LedgerSupportsProtocol blk) =>
   blk ->
-  RIO env (ExtLedgerState blk EmptyMK, LedgerTables (ExtLedgerState blk) ValuesMK)
+  RIO env (ExtLedgerState blk EmptyMK, LedgerTables blk ValuesMK)
 ledgerDbStateWithTablesForBlock block = do
   ledgerDb <- view ledgerDbL
   liftIO $ LDB.withTipForker (lLedgerDb ledgerDb) $ \tipForker -> do
@@ -189,8 +178,8 @@ ledgerDbFlushExtLedgerState ::
   ) =>
   ExtLedgerState blk DiffMK -> m ()
 ledgerDbFlushExtLedgerState extLedgerState = do
-  LedgerDb{lLedgerDb, lTestInternals} <- view ledgerDbL
-  liftIO $ LDB.push lTestInternals extLedgerState >> LDB.tryFlush lLedgerDb
+  LedgerDb{lTestInternals} <- view ledgerDbL
+  liftIO $ LDB.push lTestInternals extLedgerState
 
 ledgerDbStoreSnapshot ::
   forall env blk m.
@@ -198,7 +187,7 @@ ledgerDbStoreSnapshot ::
   , HasLogFunc env
   , MonadReader env m
   , HasLedgerDb env blk
-  , IsLedger (LedgerState blk)
+  , IsLedger LedgerState blk
   ) =>
   DiskSnapshot -> m ()
 ledgerDbStoreSnapshot DiskSnapshot{dsNumber, dsSuffix} = do
@@ -216,39 +205,22 @@ ledgerDbStoreSnapshot DiskSnapshot{dsNumber, dsSuffix} = do
           liftIO $ LDB.takeSnapshotNOW lTestInternals LDB.TakeAtVolatileTip dsSuffix
 
 data LedgerDbBackend
-  = InMemV1
-  | LMDBV1
-  | InMemV2
+  = InMemV2
   | LSMV2 !FilePath !Word64
 
 mkLedgerDbArgs :: LedgerDbBackend -> LDB.LedgerDbBackendArgs IO (CardanoBlock StandardCrypto)
 mkLedgerDbArgs ldbBackend =
   case ldbBackend of
-    InMemV1 ->
-      LDB.LedgerDbBackendArgsV1 $
-        LDB.V1.Args.V1Args
-          LDB.V1.Args.DisableFlushing
-          (LDB.V1.Backend.SomeBackendArgs LDB.V1.InMemory.InMemArgs)
-    LMDBV1 ->
-      let
-        defaultLMDBLimits :: LDB.V1.LMDB.LMDBLimits
-        defaultLMDBLimits =
-          LDB.V1.LMDB.LMDBLimits
-            { LDB.V1.LMDB.lmdbMapSize = 16 * 1024 * 1024 * 1024
-            , LDB.V1.LMDB.lmdbMaxDatabases = 10
-            , LDB.V1.LMDB.lmdbMaxReaders = 16
-            }
-       in
-        LDB.LedgerDbBackendArgsV1 $
-          LDB.V1.Args.V1Args LDB.V1.Args.DisableFlushing $
-            LDB.V1.Backend.SomeBackendArgs $
-              LDB.V1.LMDB.LMDBBackingStoreArgs "lmdb" defaultLMDBLimits Dict.Dict
     InMemV2 ->
       LDB.LedgerDbBackendArgsV2 $ LDB.V2.Backend.SomeBackendArgs LDB.V2.InMemory.InMemArgs
     LSMV2 lsmDbDir lsmSalt ->
       LDB.LedgerDbBackendArgsV2 $
         LDB.V2.Backend.SomeBackendArgs $
-          LSM.LSMArgs (mkFsPath ["lsm"]) lsmSalt (LSM.stdMkBlockIOFS lsmDbDir)
+          LSM.LSMArgs
+            (mkFsPath ["lsm"])
+            (Just $ mkFsPath ["lsm-export"])
+            lsmSalt
+            (LSM.stdMkBlockIOFS lsmDbDir)
 
 withImmutableDb ::
   ( MonadUnliftIO m
