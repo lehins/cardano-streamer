@@ -147,7 +147,7 @@ instance EraApp BabbageEra where
   appOutScriptsTxBody = babbageScriptOutsTxBody
   appRefScriptsTxBody = getAllReferenceScripts
   utxoTx tx
-    | tx ^. isValidTxL == IsValid True = txouts (tx ^. bodyTxL)
+    | tx ^. isPhase2ValidTxL == Phase2Valid = txouts (tx ^. bodyTxL)
     | otherwise = collOuts (tx ^. bodyTxL)
 
 instance EraApp ConwayEra where
@@ -155,7 +155,7 @@ instance EraApp ConwayEra where
   appOutScriptsTxBody = babbageScriptOutsTxBody
   appRefScriptsTxBody = getAllReferenceScripts
   utxoTx tx
-    | tx ^. isValidTxL == IsValid True = txouts (tx ^. bodyTxL)
+    | tx ^. isPhase2ValidTxL == Phase2Valid = txouts (tx ^. bodyTxL)
     | otherwise = collOuts (tx ^. bodyTxL)
   getRewardsFromEvents _ (Shelley.TickNewEpochEvent (Conway.TotalRewardEvent _ rs)) =
     aggregateRewards (ProtVer (eraProtVerLow @ConwayEra) 0) rs
@@ -166,7 +166,7 @@ instance EraApp DijkstraEra where
   appOutScriptsTxBody = babbageScriptOutsTxBody
   appRefScriptsTxBody = getAllReferenceScripts
   utxoTx tx
-    | tx ^. isValidTxL == IsValid True = txouts (tx ^. bodyTxL)
+    | tx ^. isPhase2ValidTxL == Phase2Valid = txouts (tx ^. bodyTxL)
     | otherwise = collOuts (tx ^. bodyTxL)
   getRewardsFromEvents _ (Shelley.TickNewEpochEvent (Conway.TotalRewardEvent _ rs)) =
     aggregateRewards (ProtVer (eraProtVerLow @DijkstraEra) 0) rs
